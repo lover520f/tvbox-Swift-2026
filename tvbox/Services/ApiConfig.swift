@@ -13,6 +13,7 @@ class ApiConfig: ObservableObject {
     @Published var dohList: [(name: String, url: String)] = []
     @Published var isLoaded: Bool = false
     @Published var configUrl: String = ""
+    @Published var liveConfigUrl: String = ""
     @Published var wallpaper: String = ""
     
     private let network = NetworkManager.shared
@@ -21,8 +22,36 @@ class ApiConfig: ObservableObject {
     
     /// 加载远程配置
     func loadConfig(from apiUrl: String) async throws {
-        self.configUrl = apiUrl
+        try await loadConfigs(vodApiUrl: apiUrl, liveApiUrl: apiUrl)
+    }
+    
+    /// 分别加载点播配置和直播配置
+    func loadConfigs(vodApiUrl: String, liveApiUrl: String) async throws {
+        let trimmedVod = vodApiUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedLive = liveApiUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedVod.isEmpty else {
+            throw ConfigError.parseError("点播接口地址不能为空")
+        }
         
+        let resolvedLive = trimmedLive.isEmpty ? trimmedVod : trimmedLive
+        self.configUrl = trimmedVod
+        self.liveConfigUrl = resolvedLive
+        
+        if trimmedVod == resolvedLive {
+            let config = try await fetchConfig(from: trimmedVod)
+            parseConfig(config, apiUrl: trimmedVod, includeSources: true, includeLive: true)
+        } else {
+            let vodConfig = try await fetchConfig(from: trimmedVod)
+            parseConfig(vodConfig, apiUrl: trimmedVod, includeSources: true, includeLive: false)
+            
+            let liveConfig = try await fetchConfig(from: resolvedLive)
+            parseConfig(liveConfig, apiUrl: resolvedLive, includeSources: false, includeLive: true)
+        }
+        
+        self.isLoaded = true
+    }
+    
+    private func fetchConfig(from apiUrl: String) async throws -> AppConfigData {
         let jsonStr = try await network.getString(from: apiUrl)
         
         // 清理非标准 JSON（Android 端 Gson 默认支持注释，Swift 需要手动处理）
@@ -32,8 +61,7 @@ class ApiConfig: ObservableObject {
             throw ConfigError.parseError("无法解析配置数据")
         }
         
-        let config = try JSONDecoder().decode(AppConfigData.self, from: data)
-        parseConfig(config, apiUrl: apiUrl)
+        return try JSONDecoder().decode(AppConfigData.self, from: data)
     }
     
     /// 去除 JSON 中的 // 行注释，兼容 TVBox 配置文件格式
@@ -97,59 +125,67 @@ class ApiConfig: ObservableObject {
     }
     
     /// 解析配置数据
-    private func parseConfig(_ config: AppConfigData, apiUrl: String) {
-        // 解析站点列表
-        var sources: [SourceBean] = []
-        if let sites = config.sites {
-            for site in sites {
-                let bean = SourceBean(
-                    key: site.key ?? UUID().uuidString,
-                    name: site.name ?? "未命名",
-                    api: site.api ?? "",
-                    searchable: site.searchable?.value ?? 1,
-                    filterable: site.filterable?.value ?? 1,
-                    playerType: site.playerType?.value ?? 0,
-                    type: site.type?.value ?? 1,
-                    ext: site.ext?.stringValue
-                )
-                sources.append(bean)
+    private func parseConfig(
+        _ config: AppConfigData,
+        apiUrl: String,
+        includeSources: Bool,
+        includeLive: Bool
+    ) {
+        if includeSources {
+            // 解析站点列表
+            var sources: [SourceBean] = []
+            if let sites = config.sites {
+                for site in sites {
+                    let bean = SourceBean(
+                        key: site.key ?? UUID().uuidString,
+                        name: site.name ?? "未命名",
+                        api: site.api ?? "",
+                        searchable: site.searchable?.value ?? 1,
+                        filterable: site.filterable?.value ?? 1,
+                        playerType: site.playerType?.value ?? 0,
+                        type: site.type?.value ?? 1,
+                        ext: site.ext?.stringValue
+                    )
+                    sources.append(bean)
+                }
+            }
+            self.sourceBeanList = sources
+            
+            // 设置默认主页源：优先选择 Swift 支持的源
+            if let saved = UserDefaults.standard.string(forKey: HawkConfig.HOME_API),
+               let found = sources.first(where: { $0.key == saved }) {
+                self.homeSourceBean = found
+            } else {
+                // 优先选择支持的源（type 0/1/4），跳过 type=3 (JAR)
+                self.homeSourceBean = sources.first(where: { $0.isSupportedInSwift }) ?? sources.first
+            }
+            
+            // 解析解析器列表
+            if let parses = config.parses {
+                self.parseBeanList = parses.map { p in
+                    ParseBean(name: p.name ?? "", url: p.url ?? "", type: p.type?.value ?? 0)
+                }
+            }
+            
+            // 解析 DoH 列表
+            if let dohs = config.doh {
+                self.dohList = dohs.compactMap { d in
+                    guard let name = d.name, let url = d.url else { return nil }
+                    return (name: name, url: url)
+                }
+            }
+            
+            // 壁纸
+            self.wallpaper = config.wallpaper ?? ""
+        }
+        
+        if includeLive {
+            if let lives = config.lives {
+                parseLives(lives, apiUrl: apiUrl)
+            } else {
+                liveChannelGroupList = []
             }
         }
-        self.sourceBeanList = sources
-        
-        // 设置默认主页源：优先选择 Swift 支持的源
-        if let saved = UserDefaults.standard.string(forKey: HawkConfig.HOME_API),
-           let found = sources.first(where: { $0.key == saved }) {
-            self.homeSourceBean = found
-        } else {
-            // 优先选择支持的源（type 0/1/4），跳过 type=3 (JAR)
-            self.homeSourceBean = sources.first(where: { $0.isSupportedInSwift }) ?? sources.first
-        }
-        
-        // 解析解析器列表
-        if let parses = config.parses {
-            self.parseBeanList = parses.map { p in
-                ParseBean(name: p.name ?? "", url: p.url ?? "", type: p.type?.value ?? 0)
-            }
-        }
-        
-        // 解析 DoH 列表
-        if let dohs = config.doh {
-            self.dohList = dohs.compactMap { d in
-                guard let name = d.name, let url = d.url else { return nil }
-                return (name: name, url: url)
-            }
-        }
-        
-        // 壁纸
-        self.wallpaper = config.wallpaper ?? ""
-        
-        // 解析直播源
-        if let lives = config.lives {
-            parseLives(lives, apiUrl: apiUrl)
-        }
-        
-        self.isLoaded = true
     }
     
     /// 解析直播列表

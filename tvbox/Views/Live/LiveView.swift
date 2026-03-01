@@ -9,7 +9,8 @@ struct LiveView: View {
     @StateObject private var viewModel = LiveViewModel()
     @EnvironmentObject var appState: AppState
     @State private var avPlayer: AVPlayer?
-    @AppStorage(HawkConfig.PLAY_TYPE) private var playTypeRaw = PlayerEngine.system.rawValue
+    @AppStorage(HawkConfig.PLAY_TYPE_LIVE) private var livePlayTypeRaw = -1
+    @AppStorage(HawkConfig.PLAY_TYPE) private var legacyPlayTypeRaw = PlayerEngine.system.rawValue
     @State private var showChannelDrawer = true
     @State private var isWindowFullScreen = false
     private let currentChannelInfoMaxWidth: CGFloat = 600
@@ -24,7 +25,18 @@ struct LiveView: View {
     @State private var vlcInteractionToken = 0
     
     private var selectedEngine: PlayerEngine {
-        PlayerEngine.fromStoredValue(playTypeRaw)
+        let defaults = UserDefaults.standard
+        let rawValue: Int
+        if defaults.object(forKey: HawkConfig.PLAY_TYPE_LIVE) != nil {
+            rawValue = livePlayTypeRaw
+        } else if defaults.object(forKey: HawkConfig.PLAY_TYPE) != nil {
+            rawValue = legacyPlayTypeRaw
+        } else {
+            rawValue = PlayerEngine.isVLCAvailable
+                ? PlayerEngine.vlc.rawValue
+                : PlayerEngine.system.rawValue
+        }
+        return PlayerEngine.fromStoredValue(rawValue)
     }
     
     var body: some View {
@@ -83,7 +95,7 @@ struct LiveView: View {
                 resetFailureTracking(for: viewModel.currentChannel)
                 wakeUpCurrentChannelInfo()
             }
-            .onChange(of: playTypeRaw) { _, _ in
+            .onChange(of: selectedEngine) { _, _ in
                 if selectedEngine == .system {
                     playChannel(url: viewModel.currentChannel?.currentUrl)
                 } else {

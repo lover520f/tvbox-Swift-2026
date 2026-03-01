@@ -4,12 +4,14 @@ import SwiftUI
 /// 设置 ViewModel
 @MainActor
 class SettingsViewModel: ObservableObject {
-    @Published var apiUrl: String = ""
+    @Published var vodApiUrl: String = ""
+    @Published var liveApiUrl: String = ""
     @Published var isLoadingConfig = false
     @Published var configError: String?
     @Published var configSuccess = false
     @Published var apiHistory: [String] = []
-    @Published var playerEngine: PlayerEngine = .system
+    @Published var vodPlayerEngine: PlayerEngine = .system
+    @Published var livePlayerEngine: PlayerEngine = .system
     @Published var decodeMode: VideoDecodeMode = .auto
     @Published var vlcBufferMode: VLCBufferMode = .defaultMode
     @Published var playTimeStep: Int = 10
@@ -21,28 +23,51 @@ class SettingsViewModel: ObservableObject {
     let vlcBufferModeOptions: [VLCBufferMode] = VLCBufferMode.allCases
     
     init() {
-        apiUrl = UserDefaults.standard.string(forKey: HawkConfig.API_URL) ?? ""
+        let defaults = UserDefaults.standard
+        let savedVod = defaults.string(forKey: HawkConfig.API_URL) ?? ""
+        vodApiUrl = savedVod
+        if let savedLive = defaults.string(forKey: HawkConfig.LIVE_API_URL) {
+            liveApiUrl = savedLive
+        } else {
+            liveApiUrl = savedVod
+        }
         loadApiHistory()
-        playerEngine = PlayerEngine.fromStoredValue(
-            UserDefaults.standard.integer(forKey: HawkConfig.PLAY_TYPE)
+        let hasLegacyPlayer = defaults.object(forKey: HawkConfig.PLAY_TYPE) != nil
+        let legacyPlayerRaw = defaults.integer(forKey: HawkConfig.PLAY_TYPE)
+        let defaultVodRaw = PlayerEngine.system.rawValue
+        let defaultLiveRaw = PlayerEngine.isVLCAvailable
+            ? PlayerEngine.vlc.rawValue
+            : PlayerEngine.system.rawValue
+        if defaults.object(forKey: HawkConfig.PLAY_TYPE_VOD) == nil {
+            defaults.set(hasLegacyPlayer ? legacyPlayerRaw : defaultVodRaw, forKey: HawkConfig.PLAY_TYPE_VOD)
+        }
+        if defaults.object(forKey: HawkConfig.PLAY_TYPE_LIVE) == nil {
+            defaults.set(hasLegacyPlayer ? legacyPlayerRaw : defaultLiveRaw, forKey: HawkConfig.PLAY_TYPE_LIVE)
+        }
+        vodPlayerEngine = PlayerEngine.fromStoredValue(
+            defaults.integer(forKey: HawkConfig.PLAY_TYPE_VOD)
+        )
+        livePlayerEngine = PlayerEngine.fromStoredValue(
+            defaults.integer(forKey: HawkConfig.PLAY_TYPE_LIVE)
         )
         decodeMode = VideoDecodeMode.fromStoredValue(
-            UserDefaults.standard.integer(forKey: HawkConfig.PLAY_DECODE_MODE)
+            defaults.integer(forKey: HawkConfig.PLAY_DECODE_MODE)
         )
         vlcBufferMode = VLCBufferMode.fromStoredValue(
-            UserDefaults.standard.integer(forKey: HawkConfig.PLAY_VLC_BUFFER_MODE)
+            defaults.integer(forKey: HawkConfig.PLAY_VLC_BUFFER_MODE)
         )
         
-        let savedStep = UserDefaults.standard.integer(forKey: HawkConfig.PLAY_TIME_STEP)
+        let savedStep = defaults.integer(forKey: HawkConfig.PLAY_TIME_STEP)
         playTimeStep = savedStep > 0 ? savedStep : 10
         refreshCacheSize()
     }
     
     /// 加载配置
     func loadConfig() async {
-        let trimmed = apiUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            configError = "请输入配置地址"
+        let trimmedVod = vodApiUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedLive = liveApiUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedVod.isEmpty else {
+            configError = "请输入点播接口地址"
             return
         }
         
@@ -51,9 +76,14 @@ class SettingsViewModel: ObservableObject {
         configSuccess = false
         
         do {
-            try await ApiConfig.shared.loadConfig(from: trimmed)
-            UserDefaults.standard.set(trimmed, forKey: HawkConfig.API_URL)
-            addToApiHistory(trimmed)
+            let resolvedLive = trimmedLive.isEmpty ? trimmedVod : trimmedLive
+            try await ApiConfig.shared.loadConfigs(vodApiUrl: trimmedVod, liveApiUrl: resolvedLive)
+            UserDefaults.standard.set(trimmedVod, forKey: HawkConfig.API_URL)
+            UserDefaults.standard.set(trimmedLive, forKey: HawkConfig.LIVE_API_URL)
+            vodApiUrl = trimmedVod
+            liveApiUrl = trimmedLive
+            addToApiHistory(trimmedVod)
+            addToApiHistory(resolvedLive)
             configSuccess = true
         } catch {
             configError = error.localizedDescription
@@ -97,11 +127,18 @@ class SettingsViewModel: ObservableObject {
         UserDefaults.standard.set(step, forKey: HawkConfig.PLAY_TIME_STEP)
     }
     
-    /// 设置播放器内核
-    func setPlayerEngine(_ engine: PlayerEngine) {
+    /// 设置点播播放器内核
+    func setVodPlayerEngine(_ engine: PlayerEngine) {
         guard playerEngineOptions.contains(engine) else { return }
-        playerEngine = engine
-        UserDefaults.standard.set(engine.rawValue, forKey: HawkConfig.PLAY_TYPE)
+        vodPlayerEngine = engine
+        UserDefaults.standard.set(engine.rawValue, forKey: HawkConfig.PLAY_TYPE_VOD)
+    }
+    
+    /// 设置直播播放器内核
+    func setLivePlayerEngine(_ engine: PlayerEngine) {
+        guard playerEngineOptions.contains(engine) else { return }
+        livePlayerEngine = engine
+        UserDefaults.standard.set(engine.rawValue, forKey: HawkConfig.PLAY_TYPE_LIVE)
     }
     
     /// 设置视频解码模式

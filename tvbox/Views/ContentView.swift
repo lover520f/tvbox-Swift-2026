@@ -2,10 +2,16 @@ import SwiftUI
 
 /// 根视图 - 对应 Android 版 HomeActivity 的 TabView 导航
 struct ContentView: View {
+    private enum ApiInputTarget {
+        case vod
+        case live
+    }
+    
     @EnvironmentObject var appState: AppState
     @StateObject private var settingsVM = SettingsViewModel()
     @State private var selectedTab = 0
     @State private var showSetup = false
+    @State private var setupInputTarget: ApiInputTarget = .vod
     
     var body: some View {
         Group {
@@ -18,10 +24,12 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             // 自动加载已保存的配置
-            let savedUrl = UserDefaults.standard.string(forKey: HawkConfig.API_URL) ?? ""
-            if !savedUrl.isEmpty {
+            let defaults = UserDefaults.standard
+            let savedVodUrl = defaults.string(forKey: HawkConfig.API_URL) ?? ""
+            let savedLiveUrl = defaults.string(forKey: HawkConfig.LIVE_API_URL) ?? ""
+            if !savedVodUrl.isEmpty {
                 Task {
-                    await appState.loadConfig(url: savedUrl)
+                    await appState.loadConfig(vodUrl: savedVodUrl, liveUrl: savedLiveUrl)
                 }
             }
         }
@@ -169,24 +177,48 @@ struct ContentView: View {
                             HStack {
                                 Image(systemName: "link")
                                     .foregroundColor(.orange)
-                                TextField("请输入接口地址 (URL)", text: $settingsVM.apiUrl)
+                                TextField("请输入点播接口地址 (URL)", text: $settingsVM.vodApiUrl)
                                     .textFieldStyle(.plain)
                                     .foregroundColor(.white)
+                                    .onTapGesture {
+                                        setupInputTarget = .vod
+                                    }
                                     #if os(iOS)
                                     .autocapitalization(.none)
                                     .keyboardType(.URL)
                                     #endif
                                 
                                 Button {
+                                    if let text = readPasteboardText() {
+                                        settingsVM.vodApiUrl = text
+                                    }
+                                } label: {
+                                    Image(systemName: "doc.on.clipboard")
+                                        .foregroundColor(.orange)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding()
+                            .glassCard(cornerRadius: 15)
+                            
+                            HStack {
+                                Image(systemName: "tv")
+                                    .foregroundColor(.orange)
+                                TextField("请输入直播接口地址 (URL，可留空跟随点播)", text: $settingsVM.liveApiUrl)
+                                    .textFieldStyle(.plain)
+                                    .foregroundColor(.white)
+                                    .onTapGesture {
+                                        setupInputTarget = .live
+                                    }
                                     #if os(iOS)
-                                    if let text = UIPasteboard.general.string {
-                                        settingsVM.apiUrl = text
-                                    }
-                                    #else
-                                    if let text = NSPasteboard.general.string(forType: .string) {
-                                        settingsVM.apiUrl = text
-                                    }
+                                    .autocapitalization(.none)
+                                    .keyboardType(.URL)
                                     #endif
+                                
+                                Button {
+                                    if let text = readPasteboardText() {
+                                        settingsVM.liveApiUrl = text
+                                    }
                                 } label: {
                                     Image(systemName: "doc.on.clipboard")
                                         .foregroundColor(.orange)
@@ -202,7 +234,7 @@ struct ContentView: View {
                             Task {
                                 await settingsVM.loadConfig()
                                 if settingsVM.configSuccess {
-                                    await appState.loadConfig(url: settingsVM.apiUrl)
+                                    appState.applyLoadedConfigState()
                                 }
                             }
                         } label: {
@@ -222,7 +254,10 @@ struct ContentView: View {
                             .clipShape(Capsule())
                             .shadow(color: .red.opacity(0.4), radius: 12, x: 0, y: 6)
                         }
-                        .disabled(settingsVM.isLoadingConfig || settingsVM.apiUrl.isEmpty)
+                        .disabled(
+                            settingsVM.isLoadingConfig
+                            || settingsVM.vodApiUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        )
                         
                         // 历史记录
                         if !settingsVM.apiHistory.isEmpty {
@@ -234,7 +269,12 @@ struct ContentView: View {
                                 
                                 ForEach(settingsVM.apiHistory.prefix(3), id: \.self) { url in
                                     Button {
-                                        settingsVM.apiUrl = url
+                                        switch setupInputTarget {
+                                        case .vod:
+                                            settingsVM.vodApiUrl = url
+                                        case .live:
+                                            settingsVM.liveApiUrl = url
+                                        }
                                     } label: {
                                         HStack {
                                             Image(systemName: "clock.arrow.2.circlepath")
@@ -275,5 +315,13 @@ struct ContentView: View {
                 }
             }
         }
+    }
+    
+    private func readPasteboardText() -> String? {
+        #if os(iOS)
+        UIPasteboard.general.string
+        #else
+        NSPasteboard.general.string(forType: .string)
+        #endif
     }
 }

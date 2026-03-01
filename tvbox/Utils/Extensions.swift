@@ -11,6 +11,8 @@ struct HawkConfig {
     static let HOME_API = "home_api"
     static let HOME_REC = "home_rec"
     static let PLAY_TYPE = "play_type"
+    static let PLAY_TYPE_VOD = "play_type_vod"
+    static let PLAY_TYPE_LIVE = "play_type_live"
     static let DOH_URL = "doh_url"
     static let SEARCH_VIEW = "search_view"
     static let LIVE_API_URL = "live_api_url"

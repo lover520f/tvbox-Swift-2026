@@ -42,15 +42,26 @@ class AppState: ObservableObject {
     #endif
     
     func loadConfig(url: String) async {
+        await loadConfig(vodUrl: url, liveUrl: nil)
+    }
+    
+    func loadConfig(vodUrl: String, liveUrl: String?) async {
+        let trimmedVod = vodUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedLive = (liveUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedVod.isEmpty else { return }
+        let resolvedLive = trimmedLive.isEmpty ? trimmedVod : trimmedLive
+        
         do {
-            try await ApiConfig.shared.loadConfig(from: url)
-            await MainActor.run {
-                self.isConfigLoaded = true
-                self.currentSourceKey = ApiConfig.shared.homeSourceBean?.key ?? ""
-            }
+            try await ApiConfig.shared.loadConfigs(vodApiUrl: trimmedVod, liveApiUrl: resolvedLive)
+            applyLoadedConfigState()
         } catch {
             print("Failed to load config: \(error)")
         }
+    }
+    
+    func applyLoadedConfigState() {
+        isConfigLoaded = true
+        currentSourceKey = ApiConfig.shared.homeSourceBean?.key ?? ""
     }
     
     #if os(macOS)

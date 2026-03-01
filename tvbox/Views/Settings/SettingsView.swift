@@ -2,17 +2,38 @@ import SwiftUI
 
 /// 设置页 - 对应 Android 版 SettingActivity + ModelSettingFragment
 struct SettingsView: View {
+    enum ApiInputType {
+        case vod
+        case live
+        
+        var title: String {
+            switch self {
+            case .vod: return "点播接口地址"
+            case .live: return "直播接口地址"
+            }
+        }
+        
+        var placeholder: String {
+            switch self {
+            case .vod: return "请输入点播接口地址"
+            case .live: return "请输入直播接口地址（可留空跟随点播）"
+            }
+        }
+    }
+    
     @StateObject private var viewModel = SettingsViewModel()
     @StateObject private var apiConfig = ApiConfig.shared
     @EnvironmentObject var appState: AppState
     @State private var showApiInput = false
+    @State private var editingApiType: ApiInputType = .vod
     @State private var showAbout = false
     @State private var sourceSearchText = ""
     @State private var showingPicker: PickerType = .none
     
     enum PickerType {
         case none
-        case player
+        case vodPlayer
+        case livePlayer
         case decode
         case vlcBuffer
         case playTimeStep
@@ -24,7 +45,21 @@ struct SettingsView: View {
                 VStack(spacing: 24) {
                     // API 配置
                     SectionCard(title: "数据源") {
-                        SettingsRow(icon: "link", title: "接口地址", value: viewModel.apiUrl.isEmpty ? "未配置" : viewModel.apiUrl) {
+                        SettingsRow(
+                            icon: "film",
+                            title: "点播接口地址",
+                            value: viewModel.vodApiUrl.isEmpty ? "未配置" : viewModel.vodApiUrl
+                        ) {
+                            editingApiType = .vod
+                            showApiInput = true
+                        }
+                        Divider().background(Color.white.opacity(0.1))
+                        SettingsRow(
+                            icon: "tv",
+                            title: "直播接口地址",
+                            value: viewModel.liveApiUrl.isEmpty ? "跟随点播接口" : viewModel.liveApiUrl
+                        ) {
+                            editingApiType = .live
                             showApiInput = true
                         }
                         Divider().background(Color.white.opacity(0.1))
@@ -39,9 +74,15 @@ struct SettingsView: View {
                     
                     // 播放设置
                     SectionCard(title: "播放设置") {
-                        SettingsRow(icon: "play.rectangle", title: "播放器", value: viewModel.playerEngine.title) {
+                        SettingsRow(icon: "play.rectangle", title: "点播播放器", value: viewModel.vodPlayerEngine.title) {
                             if viewModel.playerEngineOptions.count > 1 {
-                                showingPicker = .player
+                                showingPicker = .vodPlayer
+                            }
+                        }
+                        Divider().background(Color.white.opacity(0.1))
+                        SettingsRow(icon: "dot.radiowaves.left.and.right", title: "直播播放器", value: viewModel.livePlayerEngine.title) {
+                            if viewModel.playerEngineOptions.count > 1 {
+                                showingPicker = .livePlayer
                             }
                         }
                         Divider().background(Color.white.opacity(0.1))
@@ -115,15 +156,28 @@ struct SettingsView: View {
     @ViewBuilder
     private var pickerOverlay: some View {
         switch showingPicker {
-        case .player:
+        case .vodPlayer:
             SelectionModal(
-                title: "选择播放器",
+                title: "选择点播播放器",
                 icon: "play.rectangle.fill",
                 items: viewModel.playerEngineOptions,
-                selectedItem: viewModel.playerEngine,
+                selectedItem: viewModel.vodPlayerEngine,
                 itemTitle: { $0.title },
                 onSelect: { engine in
-                    viewModel.setPlayerEngine(engine)
+                    viewModel.setVodPlayerEngine(engine)
+                    showingPicker = .none
+                },
+                onCancel: { showingPicker = .none }
+            )
+        case .livePlayer:
+            SelectionModal(
+                title: "选择直播播放器",
+                icon: "dot.radiowaves.left.and.right",
+                items: viewModel.playerEngineOptions,
+                selectedItem: viewModel.livePlayerEngine,
+                itemTitle: { $0.title },
+                onSelect: { engine in
+                    viewModel.setLivePlayerEngine(engine)
                     showingPicker = .none
                 },
                 onCancel: { showingPicker = .none }
@@ -180,7 +234,7 @@ struct SettingsView: View {
                 HStack {
                     Image(systemName: "link")
                         .foregroundColor(.secondary)
-                    TextField("请输入接口地址", text: $viewModel.apiUrl)
+                    TextField(editingApiType.placeholder, text: currentApiBinding)
                         .textFieldStyle(.plain)
                         #if os(iOS)
                         .autocapitalization(.none)
@@ -194,15 +248,9 @@ struct SettingsView: View {
                 // 粘贴按钮
                 HStack {
                     Button {
-                        #if os(iOS)
-                        if let text = UIPasteboard.general.string {
-                            viewModel.apiUrl = text
+                        if let text = readPasteboardText() {
+                            currentApiBinding.wrappedValue = text
                         }
-                        #else
-                        if let text = NSPasteboard.general.string(forType: .string) {
-                            viewModel.apiUrl = text
-                        }
-                        #endif
                     } label: {
                         Label("粘贴", systemImage: "doc.on.clipboard")
                             .font(.subheadline)
@@ -221,7 +269,7 @@ struct SettingsView: View {
                         ForEach(viewModel.apiHistory, id: \.self) { url in
                             HStack {
                                 Button {
-                                    viewModel.apiUrl = url
+                                    currentApiBinding.wrappedValue = url
                                 } label: {
                                     HStack {
                                         Image(systemName: "clock")
@@ -256,7 +304,7 @@ struct SettingsView: View {
                 Spacer()
             }
             .padding()
-            .navigationTitle("配置接口")
+            .navigationTitle(editingApiType.title)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -269,7 +317,7 @@ struct SettingsView: View {
                         Task {
                             await viewModel.loadConfig()
                             if viewModel.configSuccess {
-                                await appState.loadConfig(url: viewModel.apiUrl)
+                                appState.applyLoadedConfigState()
                                 showApiInput = false
                             }
                         }
@@ -280,12 +328,32 @@ struct SettingsView: View {
                             Text("确认")
                         }
                     }
-                    .disabled(viewModel.isLoadingConfig || viewModel.apiUrl.isEmpty)
+                    .disabled(
+                        viewModel.isLoadingConfig
+                        || viewModel.vodApiUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
                 }
             }
         }
         #if os(iOS)
         .presentationDetents([.medium, .large])
+        #endif
+    }
+    
+    private var currentApiBinding: Binding<String> {
+        switch editingApiType {
+        case .vod:
+            return $viewModel.vodApiUrl
+        case .live:
+            return $viewModel.liveApiUrl
+        }
+    }
+    
+    private func readPasteboardText() -> String? {
+        #if os(iOS)
+        UIPasteboard.general.string
+        #else
+        NSPasteboard.general.string(forType: .string)
         #endif
     }
     

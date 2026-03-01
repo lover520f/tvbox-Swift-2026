@@ -40,11 +40,33 @@ private struct MacOSPlayerView: NSViewRepresentable {
     }
     
     static func dismantleNSView(_ nsView: AVPlayerView, coordinator: ()) {
-        nsView.player?.pause()
         nsView.player = nil
     }
 }
 #endif
+
+/// 系统播放器会话控制器：用于在页面内联与全屏视图间复用同一 AVPlayer，避免重复拉流
+@MainActor
+final class SystemPlayerSessionController: ObservableObject {
+    fileprivate var player: AVPlayer?
+    fileprivate var mediaURLString: String?
+    
+    func setPlayer(_ newPlayer: AVPlayer, urlString: String) {
+        if player !== newPlayer {
+            player?.pause()
+            player?.replaceCurrentItem(with: nil)
+        }
+        player = newPlayer
+        mediaURLString = urlString
+    }
+    
+    func stop() {
+        player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        player = nil
+        mediaURLString = nil
+    }
+}
 
 /// 视频播放器组件 - 对应 Android 版 PlayFragment
 struct PlayerView: View {
@@ -55,11 +77,22 @@ struct PlayerView: View {
     var onToggleFullScreen: (() -> Void)? = nil
     var canPlayNext: Bool = false
     var onPlayNext: (() -> Void)? = nil
+    var systemController: SystemPlayerSessionController? = nil
     var vlcController: VLCPlayerController? = nil
-    @AppStorage(HawkConfig.PLAY_TYPE) private var playTypeRaw = PlayerEngine.system.rawValue
+    @AppStorage(HawkConfig.PLAY_TYPE_VOD) private var vodPlayTypeRaw = -1
+    @AppStorage(HawkConfig.PLAY_TYPE) private var legacyPlayTypeRaw = PlayerEngine.system.rawValue
     
     private var selectedEngine: PlayerEngine {
-        PlayerEngine.fromStoredValue(playTypeRaw)
+        let defaults = UserDefaults.standard
+        let rawValue: Int
+        if defaults.object(forKey: HawkConfig.PLAY_TYPE_VOD) != nil {
+            rawValue = vodPlayTypeRaw
+        } else if defaults.object(forKey: HawkConfig.PLAY_TYPE) != nil {
+            rawValue = legacyPlayTypeRaw
+        } else {
+            rawValue = PlayerEngine.system.rawValue
+        }
+        return PlayerEngine.fromStoredValue(rawValue)
     }
     
     var body: some View {
@@ -73,7 +106,8 @@ struct PlayerView: View {
                     onPlaybackEnded: onPlaybackEnded,
                     onToggleFullScreen: onToggleFullScreen,
                     canPlayNext: canPlayNext,
-                    onPlayNext: onPlayNext
+                    onPlayNext: onPlayNext,
+                    sharedController: systemController
                 )
             case .vlc:
                 VLCVodPlayerView(
@@ -89,6 +123,22 @@ struct PlayerView: View {
             }
         }
         .id(selectedEngine.rawValue)
+        .onAppear {
+            if selectedEngine != .system {
+                systemController?.stop()
+            }
+            if selectedEngine != .vlc {
+                vlcController?.stop()
+            }
+        }
+        .onChange(of: selectedEngine) { _, newValue in
+            if newValue != .system {
+                systemController?.stop()
+            }
+            if newValue != .vlc {
+                vlcController?.stop()
+            }
+        }
     }
 }
 
@@ -101,6 +151,7 @@ struct AVPlayerContentView: View {
     var onToggleFullScreen: (() -> Void)? = nil
     var canPlayNext: Bool = false
     var onPlayNext: (() -> Void)? = nil
+    var sharedController: SystemPlayerSessionController? = nil
     @State private var player: AVPlayer?
     @State private var playbackEndObserver: NSObjectProtocol?
     @State private var timeObserverToken: Any?
@@ -195,7 +246,7 @@ struct AVPlayerContentView: View {
             wakeUpControls()
         }
         .onDisappear {
-            cleanupPlayer()
+            cleanupPlayer(keepSharedPlayer: sharedController != nil)
             controlsTimer?.invalidate()
             osdTimer?.invalidate()
         }
@@ -203,40 +254,60 @@ struct AVPlayerContentView: View {
     
     private func setupPlayer() {
         guard let url = URL(string: urlString) else { return }
+        let targetURLString = url.absoluteString
+        
+        if let sharedController,
+           sharedController.mediaURLString == targetURLString,
+           let sharedPlayer = sharedController.player {
+            cleanupPlayer(keepSharedPlayer: true)
+            player = sharedPlayer
+            bindPlayerObservers(for: sharedPlayer)
+            reportProgress(for: sharedPlayer)
+            return
+        }
         
         // 清理旧播放器
         cleanupPlayer()
         
         let playerItem = AVPlayerItem(url: url)
         let newPlayer = AVPlayer(playerItem: playerItem)
+        if let sharedController {
+            sharedController.setPlayer(newPlayer, urlString: targetURLString)
+        }
         
-        // 设置监听
+        player = newPlayer
+        bindPlayerObservers(for: newPlayer)
+        startPlayback(for: newPlayer)
+    }
+    
+    private func bindPlayerObservers(for player: AVPlayer) {
         playerObservers = [
-            newPlayer.observe(\.timeControlStatus, options: [.new]) { p, _ in
+            player.observe(\.timeControlStatus, options: [.new]) { p, _ in
                 let status = p.timeControlStatus
                 DispatchQueue.main.async { isPlaying = status == .playing }
             },
-            newPlayer.observe(\.reasonForWaitingToPlay, options: [.new]) { p, _ in
+            player.observe(\.reasonForWaitingToPlay, options: [.new]) { p, _ in
                 let reason = p.reasonForWaitingToPlay
                 DispatchQueue.main.async { isPreparing = reason != nil }
             },
-            newPlayer.observe(\.volume, options: [.new]) { p, _ in
+            player.observe(\.volume, options: [.new]) { p, _ in
                 let vol = Double(p.volume)
                 DispatchQueue.main.async { volume = vol }
             },
-            newPlayer.observe(\.rate, options: [.new]) { p, _ in
+            player.observe(\.rate, options: [.new]) { p, _ in
                 let r = p.rate
                 DispatchQueue.main.async { rate = r }
             }
         ]
-        
-        observePlaybackProgress(for: newPlayer)
-        observePlaybackEnd(for: newPlayer)
-        player = newPlayer
-        startPlayback(for: newPlayer)
+        observePlaybackProgress(for: player)
+        observePlaybackEnd(for: player)
+        isPlaying = player.timeControlStatus == .playing
+        isPreparing = player.reasonForWaitingToPlay != nil
+        volume = Double(player.volume)
+        rate = player.rate
     }
     
-    private func cleanupPlayer() {
+    private func detachPlayerObservers() {
         if let token = timeObserverToken {
             player?.removeTimeObserver(token)
             timeObserverToken = nil
@@ -247,8 +318,24 @@ struct AVPlayerContentView: View {
         }
         playerObservers.forEach { $0.invalidate() }
         playerObservers.removeAll()
-        player?.pause()
-        player?.replaceCurrentItem(with: nil)
+    }
+    
+    private func cleanupPlayer(keepSharedPlayer: Bool = false) {
+        let currentPlayer = player
+        detachPlayerObservers()
+        
+        guard let currentPlayer else { return }
+        if keepSharedPlayer, sharedController?.player === currentPlayer {
+            player = nil
+            return
+        }
+        
+        currentPlayer.pause()
+        currentPlayer.replaceCurrentItem(with: nil)
+        if sharedController?.player === currentPlayer {
+            sharedController?.player = nil
+            sharedController?.mediaURLString = nil
+        }
         player = nil
     }
     

@@ -14,6 +14,13 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     private static let maxVolume = 200
     private static let drawableSizeChangeThreshold: CGFloat = 24
     private static let drawableRebindMinimumInterval: TimeInterval = 1.2
+    // 这些选项在播放器实例级别生效，优先约束 libvlc 的追时钟/丢帧行为。
+    private static let stablePlaybackOptions: [String] = [
+        "--no-drop-late-frames",
+        "--no-skip-frames",
+        "--clock-synchro=0",
+        "--clock-jitter=0"
+    ]
     private static let playerInstanceSelector = NSSelectorFromString("playerInstance")
     private static let libVLCStopAsync: LibVLCStopAsyncFunction? = {
         // RTLD_DEFAULT 在 Swift 中不可直接用常量名，-2 等价于 C 宏 RTLD_DEFAULT。
@@ -25,7 +32,7 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     }()
     private typealias LibVLCStopAsyncFunction = @convention(c) (UnsafeMutableRawPointer?) -> Void
     
-    let mediaPlayer = VLCMediaPlayer()
+    let mediaPlayer = VLCMediaPlayer(options: VLCPlayerController.stablePlaybackOptions)
     @Published var isPreparing = true
     @Published var isPlaying = false
     @Published var currentTimeSeconds: Double = 0
@@ -60,10 +67,6 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     private var bufferMode: VLCBufferMode = .defaultMode
     private var bufferingFallbackWorkItem: DispatchWorkItem?
     private var delayedPreparingWorkItem: DispatchWorkItem?
-    private var bufferingEventCountVod = 0
-    private var lastVodBufferingCountedAt: Date = .distantPast
-    private var hasAttemptedVodCacheBoost = false
-    private var useVodCacheBoost = false
     private var currentMediaURLString: String?
     private var currentMediaIsLive = false
     private var currentMediaDecodeMode: VideoDecodeMode = .auto
@@ -73,16 +76,10 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     private var onPlaybackFailed: (() -> Void)?
     private let progressUpdateIntervalVod: TimeInterval = 0.5
     private let progressUpdateIntervalLive: TimeInterval = 1.0
-    private let bufferingFallbackThresholdVod: TimeInterval = 6.0
     private let bufferingFallbackThresholdLive: TimeInterval = 4.0
     private let bufferingConfirmDelayVod: TimeInterval = 0.35
     private let bufferingIndicatorDelayVod: TimeInterval = 1.2
-    private let vodBufferingEventDebounceInterval: TimeInterval = 1.5
     private let vodBufferingProgressAdvanceThreshold: Double = 0.25
-    private let vodCacheBoostTriggerCount = 2
-    private let vodCacheBoostExtraNetwork = 4500
-    private let vodCacheBoostExtraLive = 3500
-    private let vodCacheBoostExtraFile = 5500
     private let progressPublishThreshold: Double = 0.25
     private let durationPublishThreshold: Double = 0.5
     private var lastNonZeroVolume = defaultVolume
@@ -163,25 +160,18 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         mediaPlayer.stop()
         let media = VLCMedia(url: url)
         
-        var cacheConfig = Self.cacheConfig(isLive: isLive, bufferMode: bufferMode)
-        if !isLive && useVodCacheBoost {
-            cacheConfig.network += vodCacheBoostExtraNetwork
-            cacheConfig.live += vodCacheBoostExtraLive
-            cacheConfig.file += vodCacheBoostExtraFile
-        }
+        let cacheConfig = Self.cacheConfig(isLive: isLive, bufferMode: bufferMode)
         let enableFrameDrop = isLive ? bufferMode.enableFrameDrop : false
         let enableSkipFrames = isLive && bufferMode.enableFrameDrop
         var mediaOptions: [String: Any] = [
             "network-caching": cacheConfig.network,
             "live-caching": cacheConfig.live,
             "file-caching": cacheConfig.file,
-            "drop-late-frames": enableFrameDrop ? 1 : 0,
-            "skip-frames": enableSkipFrames ? 1 : 0,
             "http-reconnect": 1
         ]
         if !isLive {
             mediaOptions["avcodec-hurry-up"] = 0
-            mediaOptions["clock-jitter"] = 5000000
+            mediaOptions["clock-synchro"] = 0
         }
 
         if let hwOption = decodeMode.vlcHardwareDecodeOption {
@@ -195,6 +185,9 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         }
         
         media.addOptions(mediaOptions)
+        // 对布尔型选项使用显式 no- 前缀，避免 0/1 在不同 libvlc 版本下解释不一致。
+        media.addOption(enableFrameDrop ? "drop-late-frames" : "no-drop-late-frames")
+        media.addOption(enableSkipFrames ? "skip-frames" : "no-skip-frames")
         
         mediaPlayer.media = media
         mediaPlayer.play()
@@ -624,13 +617,13 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
     }
 
     private func scheduleBufferingFallbackIfNeeded() {
+        guard isLive else { return }
         guard bufferingFallbackWorkItem == nil else { return }
         guard !hasAttemptedSoftDecodeFallback else { return }
-        if !isLive && !hasAttemptedVodCacheBoost { return }
         guard decodeMode != .software else { return }
         guard mediaPlayer.media != nil else { return }
 
-        let delay = isLive ? bufferingFallbackThresholdLive : bufferingFallbackThresholdVod
+        let delay = bufferingFallbackThresholdLive
         let workItem = DispatchWorkItem { [weak self] in
             Task { @MainActor [weak self] in
                 self?.attemptSoftDecodeFallbackIfNeeded()
@@ -680,7 +673,6 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
                 isPlaying = false
             }
             scheduleDelayedPreparingIndicatorForVod()
-            scheduleBufferingFallbackIfNeeded()
             return
         }
 
@@ -743,24 +735,11 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         guard !mediaPlayer.isPlaying else { return }
         if !isInBufferingState {
             isInBufferingState = true
-            markVodBufferingEventIfNeeded()
-            if shouldAttemptVodCacheBoost() {
-                attemptVodCacheBoostIfNeeded()
-                return
-            }
         }
         if isPlaying {
             isPlaying = false
         }
         scheduleDelayedPreparingIndicatorForVod()
-        scheduleBufferingFallbackIfNeeded()
-    }
-
-    private func markVodBufferingEventIfNeeded() {
-        let now = Date()
-        guard now.timeIntervalSince(lastVodBufferingCountedAt) >= vodBufferingEventDebounceInterval else { return }
-        lastVodBufferingCountedAt = now
-        bufferingEventCountVod += 1
     }
 
     private func isStillStalledSinceBufferingStartedVod() -> Bool {
@@ -777,30 +756,6 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         }
     }
 
-    private func shouldAttemptVodCacheBoost() -> Bool {
-        !isLive && !hasAttemptedVodCacheBoost && bufferingEventCountVod >= vodCacheBoostTriggerCount
-    }
-
-    private func attemptVodCacheBoostIfNeeded() {
-        guard !isLive else { return }
-        guard !hasAttemptedVodCacheBoost else { return }
-        guard let urlString = currentMediaURLString, let url = URL(string: urlString) else { return }
-        guard mediaPlayer.media != nil else { return }
-        hasAttemptedVodCacheBoost = true
-        useVodCacheBoost = true
-        cancelDelayedPreparingIndicator()
-        cancelBufferingFallbackTimer()
-        let resumePosition = max(currentSeconds(), 0)
-        play(
-            url: url,
-            startPosition: resumePosition,
-            isLive: false,
-            onProgressChanged: onProgressChanged,
-            onPlaybackEnded: onPlaybackEnded,
-            onPlaybackFailed: onPlaybackFailed
-        )
-    }
-
     private func resetPlaybackRecoveryState() {
         cancelBufferingFallbackTimer()
         cancelDelayedPreparingIndicator()
@@ -809,10 +764,6 @@ final class VLCPlayerController: NSObject, ObservableObject, VLCMediaPlayerDeleg
         decodeModeOverride = nil
         isInBufferingState = false
         bufferingBaselineSecondsVod = 0
-        bufferingEventCountVod = 0
-        lastVodBufferingCountedAt = .distantPast
-        hasAttemptedVodCacheBoost = false
-        useVodCacheBoost = false
     }
     
     private func setPlaybackStatus(preparing: Bool, playing: Bool) {

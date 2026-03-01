@@ -8,10 +8,14 @@ import AppKit
 struct DetailView: View {
     let video: Movie.Video
     @StateObject private var viewModel = DetailViewModel()
+    @StateObject private var sharedSystemController = SystemPlayerSessionController()
     @StateObject private var sharedVLCController = VLCPlayerController()
     @EnvironmentObject var appState: AppState
     @Environment(\.modelContext) private var modelContext
     @State private var showFullScreen = false
+    #if os(macOS)
+    @State private var pendingMacWindowFullScreen = false
+    #endif
     @State private var lastPersistedProgress: Double = 0
     @State private var isCollected = false
     
@@ -19,7 +23,7 @@ struct DetailView: View {
         ScrollView {
             VStack(spacing: 0) {
                 // 播放器区域
-                if viewModel.isPlaying, let url = viewModel.playUrl {
+                if !showFullScreen, viewModel.isPlaying, let url = viewModel.playUrl {
                     PlayerView(
                         urlString: url,
                         startPosition: viewModel.currentPlaybackSeconds(),
@@ -30,6 +34,7 @@ struct DetailView: View {
                         },
                         canPlayNext: canPlayNextEpisode,
                         onPlayNext: playNextEpisodeIfNeeded,
+                        systemController: sharedSystemController,
                         vlcController: sharedVLCController
                     )
                         .id("\(viewModel.selectedFlag)-\(viewModel.selectedEpisodeIndex)-\(url)")
@@ -38,8 +43,6 @@ struct DetailView: View {
                         .onTapGesture(count: 2) {
                             openFullScreenPlayer()
                         }
-                        .opacity(showFullScreen ? 0 : 1)
-                        .allowsHitTesting(!showFullScreen)
                 }
                 
                 // 视频信息
@@ -79,7 +82,7 @@ struct DetailView: View {
         .background(AppTheme.primaryGradient)
         .navigationTitle(video.name)
         #if os(macOS)
-        .toolbar(showFullScreen ? .hidden : .visible, for: .windowToolbar)
+        .toolbar((showFullScreen || pendingMacWindowFullScreen) ? .hidden : .visible, for: .windowToolbar)
         #endif
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -93,8 +96,10 @@ struct DetailView: View {
             viewModel.commitPlaybackProgressSnapshot()
             persistHistoryIfNeeded(force: true)
             showFullScreen = false
+            sharedSystemController.stop()
             sharedVLCController.stop()
             #if os(macOS)
+            pendingMacWindowFullScreen = false
             appState.exitPlayerFullScreen()
             #endif
         }
@@ -108,6 +113,7 @@ struct DetailView: View {
                     onPlaybackEnded: playNextEpisodeIfNeeded,
                     canPlayNext: canPlayNextEpisode,
                     onPlayNext: playNextEpisodeIfNeeded,
+                    systemController: sharedSystemController,
                     vlcController: sharedVLCController,
                     onCloseRequested: closeMacFullScreenOverlay
                 )
@@ -116,7 +122,13 @@ struct DetailView: View {
                 .zIndex(2)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
+            guard pendingMacWindowFullScreen else { return }
+            pendingMacWindowFullScreen = false
+            showFullScreen = true
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
+            pendingMacWindowFullScreen = false
             if showFullScreen {
                 showFullScreen = false
             }
@@ -133,6 +145,7 @@ struct DetailView: View {
                     onPlaybackEnded: playNextEpisodeIfNeeded,
                     canPlayNext: canPlayNextEpisode,
                     onPlayNext: playNextEpisodeIfNeeded,
+                    systemController: sharedSystemController,
                     vlcController: sharedVLCController
                 )
             }
@@ -504,24 +517,33 @@ struct DetailView: View {
         showFullScreen = true
         #else
         guard viewModel.playUrl != nil else { return }
-        showFullScreen = true
         appState.enterPlayerFullScreen()
-        requestMacWindowFullScreen(enter: true)
+        
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow,
+           window.styleMask.contains(.fullScreen) {
+            showFullScreen = true
+            return
+        }
+        
+        pendingMacWindowFullScreen = requestMacWindowFullScreen(enter: true)
+        if !pendingMacWindowFullScreen {
+            showFullScreen = true
+        }
         #endif
     }
     
     #if os(macOS)
-    private func requestMacWindowFullScreen(enter: Bool) {
-        DispatchQueue.main.async {
-            guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return }
-            let isFullScreen = window.styleMask.contains(.fullScreen)
-            if enter != isFullScreen {
-                window.toggleFullScreen(nil)
-            }
-        }
+    @discardableResult
+    private func requestMacWindowFullScreen(enter: Bool) -> Bool {
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return false }
+        let isFullScreen = window.styleMask.contains(.fullScreen)
+        guard enter != isFullScreen else { return false }
+        window.toggleFullScreen(nil)
+        return true
     }
     
     private func closeMacFullScreenOverlay() {
+        pendingMacWindowFullScreen = false
         let window = NSApp.keyWindow ?? NSApp.mainWindow
         if window?.styleMask.contains(.fullScreen) == true {
             requestMacWindowFullScreen(enter: false)
@@ -541,6 +563,7 @@ struct FullScreenPlayerView: View {
     var onPlaybackEnded: (() -> Void)? = nil
     var canPlayNext: Bool = false
     var onPlayNext: (() -> Void)? = nil
+    var systemController: SystemPlayerSessionController? = nil
     var vlcController: VLCPlayerController? = nil
     var onCloseRequested: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
@@ -563,6 +586,7 @@ struct FullScreenPlayerView: View {
                 },
                 canPlayNext: canPlayNext,
                 onPlayNext: onPlayNext,
+                systemController: systemController,
                 vlcController: vlcController
             )
                 .ignoresSafeArea()
