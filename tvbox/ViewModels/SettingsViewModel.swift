@@ -4,7 +4,9 @@ import SwiftUI
 /// 设置 ViewModel
 @MainActor
 class SettingsViewModel: ObservableObject {
+    /// 当输入地址是“多仓库入口”时，先弹出候选仓库供用户确认。
     struct PendingMultiRepoSelection: Identifiable {
+        /// 当前待选择的是点播仓库还是直播仓库。
         enum Target {
             case vod
             case live
@@ -18,30 +20,54 @@ class SettingsViewModel: ObservableObject {
         }
         
         let id = UUID()
+        /// 目标类型。
         let target: Target
+        /// 用户原始输入地址（用于后续“是否联动 live 地址”判断）。
         let sourceUrl: String
+        /// 可选仓库列表。
         let options: [ApiConfig.MultiRepoOption]
     }
     
+    /// 点播配置地址。
     @Published var vodApiUrl: String = ""
+    /// 直播配置地址。
     @Published var liveApiUrl: String = ""
+    /// 配置加载中状态。
     @Published var isLoadingConfig = false
+    /// 配置错误提示。
     @Published var configError: String?
+    /// 配置是否加载成功（供 UI 执行后续跳转/收起流程）。
     @Published var configSuccess = false
+    /// 多仓库待选状态，为 nil 表示无需弹窗。
     @Published var pendingMultiRepoSelection: PendingMultiRepoSelection?
+    /// 最近输入过的 API 历史。
     @Published var apiHistory: [String] = []
+    /// 点播播放器内核选择。
     @Published var vodPlayerEngine: PlayerEngine = .system
+    /// 直播播放器内核选择。
     @Published var livePlayerEngine: PlayerEngine = .system
+    /// 解码模式选择。
     @Published var decodeMode: VideoDecodeMode = .auto
+    /// VLC 缓冲策略。
     @Published var vlcBufferMode: VLCBufferMode = .defaultMode
+    /// 快进/快退步长（秒）。
     @Published var playTimeStep: Int = 10
+    /// 缓存占用展示文本。
     @Published var cacheSizeString: String = "0 KB"
     
+    /// 快进步长候选项。
     let playTimeStepOptions: [Int] = [5, 10, 15, 30, 60]
+    /// 当前构建可用播放器列表。
     let playerEngineOptions: [PlayerEngine] = PlayerEngine.availableEngines
+    /// 解码模式候选。
     let decodeModeOptions: [VideoDecodeMode] = VideoDecodeMode.allCases
+    /// VLC 缓冲模式候选。
     let vlcBufferModeOptions: [VLCBufferMode] = VLCBufferMode.allCases
     
+    /// 初始化时完成三件事：
+    /// 1) 回填已保存的配置地址
+    /// 2) 兼容老版本单一播放器字段到新字段
+    /// 3) 回填播放/缓存相关设置
     init() {
         let defaults = UserDefaults.standard
         let savedVod = defaults.string(forKey: HawkConfig.API_URL) ?? ""
@@ -99,6 +125,7 @@ class SettingsViewModel: ObservableObject {
         do {
             let resolvedLive = trimmedLive.isEmpty ? trimmedVod : trimmedLive
             
+            // 若探测到多仓库入口，先中断加载并弹出候选，让用户显式选定目标仓库。
             if let pending = try await detectPendingMultiRepoSelection(
                 vodUrl: trimmedVod,
                 liveUrl: resolvedLive
@@ -109,6 +136,7 @@ class SettingsViewModel: ObservableObject {
             }
             
             try await ApiConfig.shared.loadConfigs(vodApiUrl: trimmedVod, liveApiUrl: resolvedLive)
+            // 保存用户输入（live 允许空值，表示跟随点播地址）。
             UserDefaults.standard.set(trimmedVod, forKey: HawkConfig.API_URL)
             UserDefaults.standard.set(trimmedLive, forKey: HawkConfig.LIVE_API_URL)
             vodApiUrl = trimmedVod
@@ -123,6 +151,7 @@ class SettingsViewModel: ObservableObject {
         isLoadingConfig = false
     }
     
+    /// 处理多仓库弹窗选择结果，并继续走统一加载流程。
     func selectPendingMultiRepoOption(_ option: ApiConfig.MultiRepoOption) async {
         guard let pending = pendingMultiRepoSelection else { return }
         let normalizedSource = ApiConfig.normalizeConfigUrl(pending.sourceUrl)
@@ -130,6 +159,7 @@ class SettingsViewModel: ObservableObject {
         switch pending.target {
         case .vod:
             let normalizedLive = ApiConfig.normalizeConfigUrl(liveApiUrl)
+            // 若 live 输入与原始 vod 相同，说明用户希望两者共用，选择后同步更新。
             let shouldSyncLive = !liveApiUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 && normalizedLive == normalizedSource
             vodApiUrl = option.url
@@ -144,11 +174,14 @@ class SettingsViewModel: ObservableObject {
         await loadConfig()
     }
     
+    /// 取消多仓库选择，恢复到普通待输入状态。
     func cancelPendingMultiRepoSelection() {
         pendingMultiRepoSelection = nil
         isLoadingConfig = false
     }
     
+    /// 尝试识别输入地址是否为多仓库入口。
+    /// - Returns: 需要弹窗选择时返回待选对象，否则返回 `nil`。
     private func detectPendingMultiRepoSelection(
         vodUrl: String,
         liveUrl: String
@@ -186,10 +219,12 @@ class SettingsViewModel: ObservableObject {
     
     // MARK: - API 历史
     
+    /// 读取 API 历史。
     private func loadApiHistory() {
         apiHistory = UserDefaults.standard.stringArray(forKey: "api_history") ?? []
     }
     
+    /// 新增历史并去重，最多保留 10 条。
     private func addToApiHistory(_ url: String) {
         apiHistory.removeAll { $0 == url }
         apiHistory.insert(url, at: 0)
@@ -199,6 +234,7 @@ class SettingsViewModel: ObservableObject {
         UserDefaults.standard.set(apiHistory, forKey: "api_history")
     }
     
+    /// 删除单条 API 历史。
     func removeApiHistory(_ url: String) {
         apiHistory.removeAll { $0 == url }
         UserDefaults.standard.set(apiHistory, forKey: "api_history")
@@ -247,12 +283,14 @@ class SettingsViewModel: ObservableObject {
         UserDefaults.standard.set(mode.rawValue, forKey: HawkConfig.PLAY_VLC_BUFFER_MODE)
     }
     
+    /// 统计并刷新缓存占用展示（网络缓存 + 图片缓存磁盘占用）。
     private func refreshCacheSize() {
         let sharedDisk = URLCache.shared.currentDiskUsage
         let imageDisk = ImageLoader.shared.cacheUsage.disk
         cacheSizeString = Self.formatSize(bytes: sharedDisk + imageDisk)
     }
     
+    /// 格式化字节大小。
     private static func formatSize(bytes: Int) -> String {
         let size = max(0, bytes)
         if size < 1024 * 1024 {

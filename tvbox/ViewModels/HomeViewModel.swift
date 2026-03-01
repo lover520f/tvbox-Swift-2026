@@ -4,15 +4,24 @@ import SwiftUI
 /// 首页 ViewModel
 @MainActor
 class HomeViewModel: ObservableObject {
+    /// 分类列表（包含手动注入的“推荐”分类）。
     @Published var sorts: [MovieSort.SortData] = []
+    /// 当前选中的分类。
     @Published var selectedSort: MovieSort.SortData?
+    /// 首页推荐内容（对应“推荐”分类）。
     @Published var homeVideos: [Movie.Video] = []
+    /// 普通分类的视频列表（分页加载）。
     @Published var categoryVideos: [Movie.Video] = []
+    /// 页面加载状态（分类加载与分页共用）。
     @Published var isLoading = false
+    /// 当前分类的分页页码。
     @Published var currentPage = 1
+    /// 是否还有下一页。
     @Published var hasMore = true
+    /// 错误提示文案。
     @Published var errorMessage: String?
     
+    /// 源数据访问服务。
     private let sourceService = SourceService.shared
     
     /// 加载分类列表
@@ -24,7 +33,7 @@ class HomeViewModel: ObservableObject {
         do {
             let result = try await sourceService.getSort(sourceBean: source)
             
-            // 添加"推荐"到首位
+            // 插入本地“推荐”分类，保持 UI 与 Android 版本习惯一致。
             var allSorts = [MovieSort.SortData.home()]
             allSorts.append(contentsOf: result.sorts)
             
@@ -43,6 +52,7 @@ class HomeViewModel: ObservableObject {
     
     /// 选择分类
     func selectSort(_ sort: MovieSort.SortData) {
+        // 切分类时先重置分页状态，避免旧分类残留数据闪烁。
         selectedSort = sort
         errorMessage = nil
         categoryVideos = []
@@ -62,6 +72,7 @@ class HomeViewModel: ObservableObject {
     private func loadCategoryVideos(page: Int, sort: MovieSort.SortData) async {
         guard sort.id != "home" else { return }
         guard let source = ApiConfig.shared.homeSourceBean else { return }
+        // 防重复并发加载，避免分页错序。
         guard !isLoading else { return }
         
         isLoading = true
@@ -78,6 +89,7 @@ class HomeViewModel: ObservableObject {
             } else {
                 categoryVideos.append(contentsOf: videos)
             }
+            // 以“返回非空”作为是否继续分页的轻量判断。
             currentPage = page
             hasMore = !videos.isEmpty
         } catch {
@@ -105,6 +117,7 @@ class HomeViewModel: ObservableObject {
     
     /// 刷新
     func refresh() async {
+        // 全量刷新时重置分页与错误态，再重新拉分类与当前分类内容。
         currentPage = 1
         hasMore = true
         categoryVideos = []

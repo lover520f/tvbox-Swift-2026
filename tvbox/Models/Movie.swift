@@ -2,28 +2,47 @@ import Foundation
 
 /// 电影/视频数据模型 - 对应 Android 版 Movie.java
 struct Movie: Codable {
+    /// 列表数据主体。
     var videoList: [Video] = []
+    /// 总页数。
     var pagecount: Int = 0
+    /// 当前页码。
     var page: Int = 0
+    /// 总条数。
     var total: Int = 0
+    /// 每页条数。
     var limit: Int = 0
     
     /// 单个视频条目
     struct Video: Codable, Identifiable, Hashable {
+        /// 视频唯一 ID（接口可能返回 Int 或 String，见自定义解码）。
         var id: String
+        /// 片名。
         var name: String = ""
+        /// 海报地址。
         var pic: String = ""
-        var note: String = ""       // 备注（如"更新至第20集"）
+        /// 备注（如“更新至第20集”）。
+        var note: String = ""
+        /// 年份。
         var year: String = ""
+        /// 地区。
         var area: String = ""
-        var type: String = ""       // 类型/分类名
+        /// 类型/分类名。
+        var type: String = ""
+        /// 导演。
         var director: String = ""
+        /// 演员。
         var actor: String = ""
-        var des: String = ""        // 简介
-        var sourceKey: String = ""  // 来源站点 key
-        var tid: String = ""        // 分类 ID
-        var last: String = ""       // 最后更新
-        var dt: String = ""         // 日期
+        /// 简介。
+        var des: String = ""
+        /// 来源站点 key，用于跨源隔离收藏与历史。
+        var sourceKey: String = ""
+        /// 分类 ID。
+        var tid: String = ""
+        /// 最后更新时间。
+        var last: String = ""
+        /// 播放来源信息（部分接口会复用该字段）。
+        var dt: String = ""
         
         init(id: String = UUID().uuidString, name: String = "", pic: String = "",
              note: String = "", sourceKey: String = "") {
@@ -51,6 +70,7 @@ struct Movie: Codable {
             case sourceKey
         }
         
+        /// 自定义解码以兼容多源字段类型差异（如 `vod_id` / `type_id` 可能是 Int 或 String）。
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             // 支持 String 或 Int 类型的 id

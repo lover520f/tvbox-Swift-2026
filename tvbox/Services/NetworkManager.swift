@@ -2,8 +2,10 @@ import Foundation
 
 /// 网络请求封装 - 对应 Android 版 OkGo
 class NetworkManager {
+    /// 全局共享实例。
     static let shared = NetworkManager()
     
+    /// 兜底字符集名称列表（按常见中文资源站编码优先级排序）。
     private static let fallbackCharsetNames: [String] = [
         "utf-8",
         "gb18030",
@@ -17,6 +19,7 @@ class NetworkManager {
         "iso-8859-1"
     ]
     
+    /// 兜底字符串编码列表（与字符集列表互补）。
     private static let fallbackStringEncodings: [String.Encoding] = [
         .utf8,
         .utf16,
@@ -29,9 +32,12 @@ class NetworkManager {
         .isoLatin1
     ]
     
+    /// 内部会话对象，统一超时与连接上限配置。
     private let session: URLSession
+    /// JSON 解码器。
     private let decoder = JSONDecoder()
     
+    /// 私有初始化，防止外部创建多个请求管理器。
     private init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
@@ -60,6 +66,7 @@ class NetworkManager {
             throw NetworkError.httpError(httpResponse.statusCode)
         }
         
+        // 统一走字符集探测 + 多编码兜底，降低跨源乱码概率。
         guard let str = Self.decodeString(data: data, response: httpResponse) else {
             throw NetworkError.decodingError("文本解码失败")
         }
@@ -85,6 +92,10 @@ class NetworkManager {
         return data
     }
     
+    /// 文本解码策略：
+    /// 1) 先用响应头声明字符集；
+    /// 2) 再按常见字符集与编码顺序尝试；
+    /// 3) 最后用 UTF-8 宽容解码兜底。
     private static func decodeString(data: Data, response: HTTPURLResponse) -> String? {
         // 优先使用服务端声明的字符集（如 gbk / gb2312 / gb18030）
         if let charset = response.textEncodingName,
@@ -114,6 +125,7 @@ class NetworkManager {
         return nil
     }
     
+    /// IANA 字符集名转 `String.Encoding`。
     private static func encoding(fromIANACharset charset: String) -> String.Encoding? {
         let cfEncoding = CFStringConvertIANACharSetNameToEncoding(charset as CFString)
         guard cfEncoding != kCFStringEncodingInvalidId else {
@@ -124,12 +136,14 @@ class NetworkManager {
     }
 }
 
+/// 网络层错误定义。
 enum NetworkError: LocalizedError {
     case invalidURL(String)
     case invalidResponse
     case httpError(Int)
     case decodingError(String)
     
+    /// 面向 UI/日志的错误描述。
     var errorDescription: String? {
         switch self {
         case .invalidURL(let url): return "无效的URL: \(url)"

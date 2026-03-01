@@ -2,11 +2,14 @@ import Foundation
 
 /// 播放器引擎类型
 enum PlayerEngine: Int, CaseIterable, Identifiable {
+    /// 系统 AVPlayer 内核。
     case system = 0
+    /// VLC 内核（需编译时可导入 VLCKitSPM）。
     case vlc = 10
     
     var id: Int { rawValue }
     
+    /// UI 展示名。
     var title: String {
         switch self {
         case .system:
@@ -16,6 +19,7 @@ enum PlayerEngine: Int, CaseIterable, Identifiable {
         }
     }
     
+    /// 当前构建产物是否包含 VLC 能力。
     static var isVLCAvailable: Bool {
         #if canImport(VLCKitSPM)
         return true
@@ -24,6 +28,8 @@ enum PlayerEngine: Int, CaseIterable, Identifiable {
         #endif
     }
     
+    /// 实际可供用户选择的播放器列表。
+    /// 当 VLC 不可用时，仅暴露系统播放器，避免无效配置。
     static var availableEngines: [PlayerEngine] {
         var engines: [PlayerEngine] = [.system]
         if isVLCAvailable {
@@ -32,6 +38,7 @@ enum PlayerEngine: Int, CaseIterable, Identifiable {
         return engines
     }
     
+    /// 从持久化值恢复播放器选项，并自动兜底到可用引擎。
     static func fromStoredValue(_ rawValue: Int) -> PlayerEngine {
         guard let engine = PlayerEngine(rawValue: rawValue) else {
             return .system
@@ -47,8 +54,11 @@ enum PlayerEngine: Int, CaseIterable, Identifiable {
 
 /// 视频解码模式
 enum VideoDecodeMode: Int, CaseIterable, Identifiable {
+    /// 自动策略，优先硬解，失败时用户可切换。
     case auto = 0
+    /// 强制硬解。
     case hardware = 1
+    /// 强制软解。
     case software = 2
     
     var id: Int { rawValue }
@@ -69,6 +79,7 @@ enum VideoDecodeMode: Int, CaseIterable, Identifiable {
     }
     
     /// VLC 媒体选项
+    /// 返回 `avcodec-hw` 对应的值。
     var vlcHardwareDecodeOption: String? {
         switch self {
         case .auto:
@@ -84,8 +95,11 @@ enum VideoDecodeMode: Int, CaseIterable, Identifiable {
 
 /// VLC 缓冲策略
 enum VLCBufferMode: Int, CaseIterable, Identifiable {
+    /// 低延迟优先，适合直播但容错较低。
     case lowLatency = 0
+    /// 兼顾延迟与稳定性，作为默认策略。
     case balanced = 1
+    /// 稳定流畅优先，允许更高缓冲。
     case smooth = 2
 
     var id: Int { rawValue }
@@ -111,6 +125,10 @@ enum VLCBufferMode: Int, CaseIterable, Identifiable {
         self == .lowLatency
     }
 
+    /// 根据直播/点播场景输出三类缓存值（单位毫秒）。
+    /// - Parameters:
+    ///   - isLive: 是否直播场景
+    /// - Returns: network/live/file 三类缓存配置
     func cacheConfig(isLive: Bool) -> (network: Int, live: Int, file: Int) {
         switch self {
         case .lowLatency:

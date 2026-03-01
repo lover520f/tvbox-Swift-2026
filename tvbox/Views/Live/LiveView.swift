@@ -6,24 +6,43 @@ import AppKit
 
 /// 直播页 - 对应 Android 版 LivePlayActivity
 struct LiveView: View {
+    /// 直播频道与选中状态管理。
     @StateObject private var viewModel = LiveViewModel()
+    /// 全局应用状态（用于 macOS 全屏时调整分栏布局）。
     @EnvironmentObject var appState: AppState
+    /// 系统播放器实例（仅在选择系统内核时使用）。
     @State private var avPlayer: AVPlayer?
+    /// 直播播放器内核配置（新字段）。
     @AppStorage(HawkConfig.PLAY_TYPE_LIVE) private var livePlayTypeRaw = -1
+    /// 兼容旧版本单播放器字段。
     @AppStorage(HawkConfig.PLAY_TYPE) private var legacyPlayTypeRaw = PlayerEngine.system.rawValue
+    /// 是否展示左侧频道抽屉。
     @State private var showChannelDrawer = true
+    /// 当前窗口是否处于全屏。
     @State private var isWindowFullScreen = false
+    /// 底部频道信息卡最大宽度。
     private let currentChannelInfoMaxWidth: CGFloat = 600
+    /// AVPlayer 状态观察者。
     @State private var itemStatusObserver: NSKeyValueObservation?
+    /// 播放失败通知观察者。
     @State private var playbackFailedObserver: NSObjectProtocol?
+    /// 播放卡顿通知观察者。
     @State private var playbackStalledObserver: NSObjectProtocol?
+    /// 当前频道已失败的线路索引，用于自动切线去重。
     @State private var failedSourceIndices: Set<Int> = []
+    /// 当前跟踪的频道 ID（频道切换时重置失败状态）。
     @State private var trackedChannelId: String = ""
+    /// 底部频道信息是否显示。
     @State private var showCurrentChannelInfo = true
+    /// 自动隐藏频道信息的定时器。
     @State private var channelInfoTimer: Timer?
+    /// 频道信息自动隐藏延迟（秒）。
     private let channelInfoAutoHideDelay: TimeInterval = 3.0
+    /// 用户交互令牌，递增后可通知 VLC 子视图重置自动隐藏逻辑。
     @State private var vlcInteractionToken = 0
     
+    /// 当前实际生效的播放器内核。
+    /// 优先读取直播专用字段，再回退老字段，最后使用默认值。
     private var selectedEngine: PlayerEngine {
         let defaults = UserDefaults.standard
         let rawValue: Int
@@ -80,6 +99,7 @@ struct LiveView: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .onAppear {
+                // 首次进入时加载频道并展示频道信息卡。
                 viewModel.loadChannels()
                 wakeUpCurrentChannelInfo()
             }
@@ -92,6 +112,7 @@ struct LiveView: View {
                 wakeUpCurrentChannelInfo()
             }
             .onChange(of: viewModel.currentChannel?.id) { _, _ in
+                // 切台后清空失败线路记录，避免复用上个频道的失败状态。
                 resetFailureTracking(for: viewModel.currentChannel)
                 wakeUpCurrentChannelInfo()
             }
@@ -364,6 +385,7 @@ struct LiveView: View {
     }
     
     private func reportUserActivity() {
+        // 任意交互都刷新显示时间，并触发 VLC 子层同步交互状态。
         wakeUpCurrentChannelInfo()
         vlcInteractionToken &+= 1
     }
@@ -459,6 +481,7 @@ struct LiveView: View {
     }
     
     private func cleanupPlayer() {
+        // 先移除观察者再释放播放器，避免悬空回调。
         if let observer = playbackFailedObserver {
             NotificationCenter.default.removeObserver(observer)
             playbackFailedObserver = nil
@@ -475,6 +498,7 @@ struct LiveView: View {
     }
     
     private func observePlaybackFailure(for item: AVPlayerItem) {
+        // KVO 监听 item 状态失败。
         itemStatusObserver = item.observe(\.status, options: [.new]) { observedItem, _ in
             if observedItem.status == .failed {
                 DispatchQueue.main.async {
@@ -483,6 +507,7 @@ struct LiveView: View {
             }
         }
         
+        // 播放到结尾失败回调。
         playbackFailedObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemFailedToPlayToEndTime,
             object: item,
@@ -491,6 +516,7 @@ struct LiveView: View {
             handlePlaybackFailure(trigger: "item_failed")
         }
         
+        // 播放卡顿回调。
         playbackStalledObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemPlaybackStalled,
             object: item,
@@ -526,6 +552,7 @@ struct LiveView: View {
     private func switchToNextAvailableSource(totalSources: Int) -> Bool {
         guard failedSourceIndices.count < totalSources else { return false }
         
+        // 最多轮询 `totalSources` 次，找到一条尚未失败的线路即返回。
         for _ in 0..<totalSources {
             viewModel.switchSource()
             guard let nextIndex = viewModel.currentChannel?.sourceIndex else { return false }

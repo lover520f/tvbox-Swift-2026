@@ -2,15 +2,24 @@ import Foundation
 
 /// 视频源站点配置 - 对应 Android 版 SourceBean.java
 struct SourceBean: Codable, Identifiable, Hashable {
+    /// 以源 key 作为稳定标识。
     var id: String { key }
     
+    /// 源唯一键。
     let key: String
+    /// 源显示名。
     let name: String
+    /// 源接口地址。
     let api: String
-    let searchable: Int       // 0:关闭搜索 1:启用搜索
-    let filterable: Int       // 0:首页不可选 1:首页可选
-    let playerType: Int       // 0:系统 1:IJK 2:EXO
-    let type: Int             // 0:xml 1:json 3:jar 4:remote
+    /// 搜索开关：0 关闭，1 开启。
+    let searchable: Int
+    /// 是否允许出现在首页分类：0 不可选，1 可选。
+    let filterable: Int
+    /// 源声明的播放器类型（历史字段，Swift 端目前主要走统一播放器策略）。
+    let playerType: Int
+    /// 源协议类型：0 XML，1 JSON，3 JAR，4 Remote。
+    let type: Int
+    /// 扩展参数（remote 源常用）。
     let ext: String?
     
     init(key: String = "", name: String = "", api: String = "",

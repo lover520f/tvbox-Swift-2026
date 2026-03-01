@@ -3,15 +3,19 @@ import SwiftData
 
 /// 历史记录页 - 对应 Android 版 HistoryActivity
 struct HistoryView: View {
+    /// 按最近播放时间倒序展示历史记录。
     @Query(sort: \VodRecord.updateTime, order: .reverse)
     private var records: [VodRecord]
+    /// SwiftData 上下文，用于删除单条记录或清空历史。
     @Environment(\.modelContext) private var modelContext
     
     #if os(iOS)
+    /// iOS 网格配置。
     private let columns = [
         GridItem(.adaptive(minimum: 120, maximum: 160), spacing: 12)
     ]
     #else
+    /// macOS 网格配置。
     private let columns = [
         GridItem(.adaptive(minimum: 140, maximum: 180), spacing: 16)
     ]
@@ -25,6 +29,7 @@ struct HistoryView: View {
                 } else {
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: 16) {
+                            // 记录卡片支持跳转详情与右键删除。
                             ForEach(records) { item in
                                 NavigationLink(value: movieVideo(from: item)) {
                                     recordCard(item)
@@ -53,6 +58,7 @@ struct HistoryView: View {
             .toolbar {
                 if !records.isEmpty {
                     ToolbarItem(placement: .automatic) {
+                        // 清空历史使用统一缓存服务，确保行为与其他入口一致。
                         Button {
                             Task {
                                 CacheStore.shared.clearHistory(context: modelContext)
@@ -64,12 +70,14 @@ struct HistoryView: View {
                     }
                 }
             }
+            // 与首页/搜索/收藏共用同一种详情路由模型。
             .navigationDestination(for: Movie.Video.self) { video in
                 DetailView(video: video)
             }
         }
     }
     
+    /// 无历史时的占位视图。
     private var emptyState: some View {
         EmptyStateView(
             icon: "clock.arrow.circlepath",
@@ -79,6 +87,8 @@ struct HistoryView: View {
         .padding(40)
     }
     
+    /// 历史卡片。
+    /// 除海报和标题外，额外显示播放进度与更新时间，便于快速续播。
     private func recordCard(_ item: VodRecord) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             ZStack(alignment: .bottomLeading) {
@@ -115,6 +125,7 @@ struct HistoryView: View {
         }
     }
     
+    /// 将历史记录转换为详情页的入参模型。
     private func movieVideo(from item: VodRecord) -> Movie.Video {
         Movie.Video(id: item.vodId, name: item.vodName, pic: item.vodPic, sourceKey: item.sourceKey)
     }

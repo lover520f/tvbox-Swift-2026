@@ -2,9 +2,13 @@ import Foundation
 import SwiftUI
 
 struct PlaybackQualityOption: Identifiable, Hashable {
+    /// “自动”选项固定标识。
     static let autoIdentifier = "auto"
+    /// 选项唯一标识（这里直接使用播放地址或固定 auto id）。
     let id: String
+    /// UI 展示名（如 1080p / 720p / 自动）。
     let name: String
+    /// 对应播放地址。
     let url: String
     
     var isAuto: Bool {
@@ -19,23 +23,39 @@ struct PlaybackQualityOption: Identifiable, Hashable {
 /// 详情页 ViewModel
 @MainActor
 class DetailViewModel: ObservableObject {
+    /// 详情信息主体。
     @Published var vodInfo: VodInfo?
+    /// 加载状态。
     @Published var isLoading = false
+    /// 错误提示。
     @Published var errorMessage: String?
+    /// 当前选中线路。
     @Published var selectedFlag: String = ""
+    /// 当前选中剧集索引。
     @Published var selectedEpisodeIndex: Int = 0
+    /// 是否处于播放态。
     @Published var isPlaying = false
+    /// 当前实际播放地址（可能是原始地址，也可能是清晰度切换后的子流地址）。
     @Published var playUrl: String?
+    /// 续播起始位置（秒）。
     @Published var resumeSeconds: Double = 0
+    /// 当前可选清晰度列表。
     @Published var qualityOptions: [PlaybackQualityOption] = []
+    /// 当前选中的清晰度 id。
     @Published var selectedQualityId: String = PlaybackQualityOption.autoIdentifier
+    /// 播放器高频回调进度，不直接绑定 UI，避免高频刷新引发性能问题。
     private var realtimeProgressSeconds: Double = 0
     
+    /// 数据服务与网络服务。
     private let sourceService = SourceService.shared
     private let network = NetworkManager.shared
+    /// 当前清晰度列表对应的基础剧集地址。
     private var qualityBaseEpisodeURL: String = ""
+    /// 清晰度解析缓存，key 为原始剧集 URL。
     private var qualityOptionCache: [String: [PlaybackQualityOption]] = [:]
+    /// 清晰度解析任务，用于取消旧请求。
     private var qualityResolveTask: Task<Void, Never>?
+    /// 解析令牌，防止异步结果回写到过期状态。
     private var qualityResolveToken = UUID()
     
     /// 加载视频详情
@@ -105,6 +125,7 @@ class DetailViewModel: ObservableObject {
         realtimeProgressSeconds = 0
         
         if let episode = vodInfo?.currentEpisode {
+            // 仅当剧集 URL 变化时重置清晰度选择。
             let shouldResetQuality = qualityBaseEpisodeURL != episode.url
             updateQualityOptions(for: episode.url, resetSelection: shouldResetQuality)
             playUrl = selectedPlayableURL(fallback: episode.url)
@@ -144,6 +165,7 @@ class DetailViewModel: ObservableObject {
         selectedQualityId = option.id
         guard isPlaying else { return }
         
+        // “自动”使用基础剧集地址；其他选项使用对应变体地址。
         let targetURL = option.url.isEmpty ? qualityBaseEpisodeURL : option.url
         guard !targetURL.isEmpty, playUrl != targetURL else { return }
         
@@ -208,6 +230,7 @@ class DetailViewModel: ObservableObject {
     }
     
     private func selectedPlayableURL(fallback: String) -> String {
+        // 若当前清晰度存在有效 URL，则优先使用；否则回退剧集原始地址。
         let selected = qualityOptions.first(where: { $0.id == selectedQualityId })?.url
         if let selected, !selected.isEmpty {
             return selected
@@ -215,6 +238,7 @@ class DetailViewModel: ObservableObject {
         return fallback
     }
     
+    /// 重置清晰度解析与选择状态。
     private func resetQualityState() {
         qualityResolveTask?.cancel()
         qualityResolveTask = nil
@@ -231,6 +255,7 @@ class DetailViewModel: ObservableObject {
             return
         }
         
+        // 切换剧集时先取消旧任务，避免异步回写错位。
         qualityResolveTask?.cancel()
         qualityResolveTask = nil
         
@@ -245,6 +270,7 @@ class DetailViewModel: ObservableObject {
         qualityOptions = [autoOption]
         
         if let cached = qualityOptionCache[trimmedEpisodeURL] {
+            // 缓存命中时直接复用，避免重复网络解析。
             qualityOptions = cached
             if resetSelection || !cached.contains(where: { $0.id == selectedQualityId }) {
                 selectedQualityId = PlaybackQualityOption.autoIdentifier
@@ -277,12 +303,14 @@ class DetailViewModel: ObservableObject {
         }
     }
     
+    /// 尝试从 HLS 主播放列表解析多清晰度选项。
     private func resolveQualityOptions(for episodeURL: String) async -> [PlaybackQualityOption] {
         guard let url = URL(string: episodeURL), Self.looksLikeHLSURL(url) else { return [] }
         guard let playlist = try? await network.getString(from: episodeURL) else { return [] }
         return Self.parseMasterPlaylist(playlist, masterURL: url)
     }
     
+    /// HLS 变体流中间模型。
     private struct HLSVariant {
         let url: String
         let name: String?
@@ -290,6 +318,7 @@ class DetailViewModel: ObservableObject {
         let bandwidth: Int?
     }
     
+    /// 轻量判断 URL 是否可能是 HLS 播放列表。
     private static func looksLikeHLSURL(_ url: URL) -> Bool {
         let lowercased = url.absoluteString.lowercased()
         if lowercased.contains(".m3u8") { return true }
@@ -297,6 +326,8 @@ class DetailViewModel: ObservableObject {
         return ext == "m3u8" || ext == "m3u"
     }
     
+    /// 解析 HLS 主播放列表并生成清晰度选项。
+    /// 仅当解析出 2 个及以上有效变体时才返回（否则不显示清晰度切换）。
     private static func parseMasterPlaylist(_ content: String, masterURL: URL) -> [PlaybackQualityOption] {
         guard content.localizedCaseInsensitiveContains("#EXT-X-STREAM-INF") else { return [] }
         
@@ -407,6 +438,7 @@ class DetailViewModel: ObservableObject {
         return merged
     }
     
+    /// 解析 `EXT-X-STREAM-INF` 的属性串为键值字典。
     private static func parseAttributeMap(_ raw: String) -> [String: String] {
         var result: [String: String] = [:]
         let pairs = splitAttributes(raw)
@@ -426,6 +458,7 @@ class DetailViewModel: ObservableObject {
         return result
     }
     
+    /// 按逗号分隔属性，但保留引号内逗号。
     private static func splitAttributes(_ raw: String) -> [String] {
         var parts: [String] = []
         var buffer = ""

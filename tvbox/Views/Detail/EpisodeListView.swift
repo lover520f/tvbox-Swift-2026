@@ -2,17 +2,24 @@ import SwiftUI
 
 /// 剧集列表组件 - 对应 Android 版 SeriesAdapter
 struct EpisodeListView: View {
+    /// 当前线路下的全部剧集。
     let episodes: [VodInfo.Episode]
+    /// 外部传入的当前选中集索引（绝对索引）。
     let selectedIndex: Int
+    /// 点击某一集后的回调（返回绝对索引）。
     let onSelect: (Int) -> Void
     
+    /// 当前分组索引（每 50 集一个分组，避免超长列表影响渲染与选择体验）。
     @State private var currentGroup = 0
+    /// 每个分组展示的剧集数量。
     private let groupSize = 50
     
+    /// 分组总数，至少为 1，避免空数组时出现 0 组的边界问题。
     private var groupCount: Int {
         max(1, (episodes.count + groupSize - 1) / groupSize)
     }
     
+    /// 当前分组对应的切片数据。
     private var currentEpisodes: [VodInfo.Episode] {
         let start = currentGroup * groupSize
         let end = min(start + groupSize, episodes.count)
@@ -62,6 +69,7 @@ struct EpisodeListView: View {
                     GridItem(.fixed(44)),
                     GridItem(.fixed(44))
                 ], spacing: 10) {
+                    // 这里使用当前组内索引 + 组偏移，换算成全局索引以便外部状态一致。
                     ForEach(Array(currentEpisodes.enumerated()), id: \.offset) { index, episode in
                         let actualIndex = currentGroup * groupSize + index
                         Button {

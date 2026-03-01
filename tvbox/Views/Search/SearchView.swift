@@ -2,13 +2,16 @@ import SwiftUI
 
 /// 搜索页 - 对应 Android 版 SearchActivity
 struct SearchView: View {
+    /// 搜索状态与结果管理。
     @StateObject private var viewModel = SearchViewModel()
     
     #if os(iOS)
+    /// iOS 卡片网格参数。
     private let columns = [
         GridItem(.adaptive(minimum: 120, maximum: 160), spacing: 12)
     ]
     #else
+    /// macOS 卡片网格参数。
     private let columns = [
         GridItem(.adaptive(minimum: 140, maximum: 180), spacing: 16)
     ]
@@ -29,6 +32,7 @@ struct SearchView: View {
                 } else if !viewModel.results.isEmpty {
                     searchResults
                 } else if viewModel.keyword.isEmpty {
+                    // 输入为空时显示历史；输入非空但无结果时显示提示文案。
                     searchHistorySection
                 } else if let error = viewModel.errorMessage {
                     Spacer()
@@ -53,6 +57,7 @@ struct SearchView: View {
     
     // MARK: - 搜索栏
     
+    /// 顶部搜索输入区。
     private var searchBar: some View {
         HStack(spacing: 12) {
             HStack(spacing: 10) {
@@ -114,6 +119,7 @@ struct SearchView: View {
     
     // MARK: - 搜索结果
     
+    /// 搜索结果网格。
     private var searchResults: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 16) {
@@ -134,6 +140,7 @@ struct SearchView: View {
     
     // MARK: - 搜索历史
     
+    /// 搜索历史区域，支持复用历史关键词与一键清空。
     private var searchHistorySection: some View {
         VStack(alignment: .leading, spacing: 12) {
             if !viewModel.searchHistory.isEmpty {
@@ -183,13 +190,16 @@ struct SearchView: View {
 
 /// 流式布局
 struct FlowLayout: Layout {
+    /// 子项间距。
     var spacing: CGFloat = 8
     
+    /// 计算整体尺寸。
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let result = arrangement(proposal: proposal, subviews: subviews)
         return result.size
     }
     
+    /// 按计算结果放置子视图。
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let result = arrangement(proposal: ProposedViewSize(width: bounds.width, height: bounds.height), subviews: subviews)
         for (index, position) in result.positions.enumerated() {
@@ -197,6 +207,7 @@ struct FlowLayout: Layout {
         }
     }
     
+    /// 核心排版算法：按最大宽度逐个放置，超宽后自动换行。
     private func arrangement(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, positions: [CGPoint]) {
         let maxWidth = proposal.width ?? .infinity
         var positions: [CGPoint] = []

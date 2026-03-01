@@ -2,7 +2,9 @@ import SwiftUI
 
 /// 视频卡片组件
 struct VodCardView: View {
+    /// 卡片对应的视频数据。
     let video: Movie.Video
+    /// 悬停状态（主要用于 macOS 悬停放大动效）。
     @State private var isHovered = false
     
     var body: some View {
@@ -44,6 +46,7 @@ struct VodCardView: View {
                         .padding(8)
                 }
             }
+            // 悬停缩放只增强视觉反馈，不影响点击命中区域。
             .scaleEffect(isHovered ? 1.05 : 1.0)
             .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isHovered)
             .onHover { hovering in
@@ -67,6 +70,7 @@ struct VodCardView: View {
         }
     }
     
+    /// 海报占位图，避免图片加载失败导致卡片高度塌陷。
     private var placeholderImage: some View {
         RoundedRectangle(cornerRadius: AppTheme.cardRadius)
             .fill(Color.white.opacity(0.05))

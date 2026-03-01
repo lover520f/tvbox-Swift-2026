@@ -4,12 +4,19 @@ import SwiftUI
 /// 直播 ViewModel
 @MainActor
 class LiveViewModel: ObservableObject {
+    /// 全部频道分组。
     @Published var channelGroups: [LiveChannelGroup] = []
+    /// 当前选中分组索引。
     @Published var selectedGroupIndex: Int = 0
+    /// 当前选中频道索引（相对于当前分组）。
     @Published var selectedChannelIndex: Int = 0
+    /// 当前播放频道。
     @Published var currentChannel: LiveChannelItem?
+    /// 当前频道节目单（预留）。
     @Published var epgList: [Epginfo] = []
+    /// 加载状态（预留，便于后续接入远程 EPG）。
     @Published var isLoading = false
+    /// 是否显示频道列表（预留给 TV 遥控交互）。
     @Published var showChannelList = false
     
     /// 加载直播频道
@@ -67,6 +74,7 @@ class LiveViewModel: ObservableObject {
     
     /// 切换线路
     func switchSource() {
+        // `currentChannel` 为值类型，调用 mutating 方法会触发 @Published 重新发布。
         currentChannel?.nextSource()
     }
     
@@ -78,13 +86,15 @@ class LiveViewModel: ObservableObject {
     
     /// 加载 EPG 节目单
     private func loadEPG(for channel: LiveChannelItem) {
-        // EPG 加载 - 简化实现
+        // 预留：后续可在此按频道名/频道 ID 请求远程 EPG。
+        // 当前版本先清空，避免展示过期节目单。
         epgList = []
     }
 }
 
 // 安全数组下标访问
 extension Collection {
+    /// 安全下标读取，越界时返回 `nil`。
     subscript(safe index: Index) -> Element? {
         indices.contains(index) ? self[index] : nil
     }
