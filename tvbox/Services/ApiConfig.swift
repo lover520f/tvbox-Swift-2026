@@ -5,6 +5,15 @@ import Foundation
 @MainActor
 class ApiConfig: ObservableObject {
     static let shared = ApiConfig()
+    private static let maxConfigResolveDepth = 6
+    private static let maxRedirectCandidates = 20
+    
+    struct MultiRepoOption: Identifiable, Equatable {
+        let name: String
+        let url: String
+        
+        var id: String { url.lowercased() }
+    }
     
     @Published var sourceBeanList: [SourceBean] = []
     @Published var homeSourceBean: SourceBean?
@@ -38,21 +47,65 @@ class ApiConfig: ObservableObject {
         self.liveConfigUrl = resolvedLive
         
         if trimmedVod == resolvedLive {
-            let config = try await fetchConfig(from: trimmedVod)
-            parseConfig(config, apiUrl: trimmedVod, includeSources: true, includeLive: true)
+            let configResult = try await fetchConfig(from: trimmedVod)
+            parseConfig(
+                configResult.config,
+                apiUrl: configResult.loadedFrom,
+                includeSources: true,
+                includeLive: true
+            )
         } else {
             let vodConfig = try await fetchConfig(from: trimmedVod)
-            parseConfig(vodConfig, apiUrl: trimmedVod, includeSources: true, includeLive: false)
+            parseConfig(
+                vodConfig.config,
+                apiUrl: vodConfig.loadedFrom,
+                includeSources: true,
+                includeLive: false
+            )
             
             let liveConfig = try await fetchConfig(from: resolvedLive)
-            parseConfig(liveConfig, apiUrl: resolvedLive, includeSources: false, includeLive: true)
+            parseConfig(
+                liveConfig.config,
+                apiUrl: liveConfig.loadedFrom,
+                includeSources: false,
+                includeLive: true
+            )
         }
         
         self.isLoaded = true
     }
     
-    private func fetchConfig(from apiUrl: String) async throws -> AppConfigData {
-        let jsonStr = try await network.getString(from: apiUrl)
+    private func fetchConfig(from apiUrl: String) async throws -> (config: AppConfigData, loadedFrom: String) {
+        try await fetchConfig(
+            from: apiUrl,
+            visitedUrls: Set<String>(),
+            depth: 0
+        )
+    }
+    
+    private func fetchConfig(
+        from apiUrl: String,
+        visitedUrls: Set<String>,
+        depth: Int
+    ) async throws -> (config: AppConfigData, loadedFrom: String) {
+        guard depth <= Self.maxConfigResolveDepth else {
+            throw ConfigError.parseError("配置跳转层级过深（超过 \(Self.maxConfigResolveDepth) 层）")
+        }
+        
+        let normalizedUrl = Self.normalizeConfigUrl(apiUrl)
+        guard !normalizedUrl.isEmpty else {
+            throw ConfigError.parseError("配置地址为空")
+        }
+        
+        let visitKey = normalizedUrl.lowercased()
+        guard !visitedUrls.contains(visitKey) else {
+            throw ConfigError.parseError("检测到循环引用的配置地址: \(normalizedUrl)")
+        }
+        
+        var nextVisited = visitedUrls
+        nextVisited.insert(visitKey)
+        
+        let jsonStr = try await network.getString(from: normalizedUrl)
         
         // 清理非标准 JSON（Android 端 Gson 默认支持注释，Swift 需要手动处理）
         let cleanedJson = Self.stripJsonComments(jsonStr)
@@ -61,7 +114,283 @@ class ApiConfig: ObservableObject {
             throw ConfigError.parseError("无法解析配置数据")
         }
         
-        return try JSONDecoder().decode(AppConfigData.self, from: data)
+        let decoder = JSONDecoder()
+        let decodedConfig = try? decoder.decode(AppConfigData.self, from: data)
+        if let config = decodedConfig, config.hasUsableContent {
+            return (config, normalizedUrl)
+        }
+        
+        if let multiRepo = try? decoder.decode(MultiRepoConfigData.self, from: data) {
+            let candidateUrls = Self.uniqueUrlsInOrder(
+                multiRepo.candidateUrls.map(Self.normalizeConfigUrl)
+            )
+            
+            var lastError: Error?
+            for candidateUrl in candidateUrls {
+                do {
+                    return try await fetchConfig(
+                        from: candidateUrl,
+                        visitedUrls: nextVisited,
+                        depth: depth + 1
+                    )
+                } catch {
+                    lastError = error
+                }
+            }
+            
+            if let lastError {
+                throw ConfigError.parseError("多仓库配置中没有可用地址，最后错误: \(lastError.localizedDescription)")
+            }
+            throw ConfigError.parseError("多仓库配置中没有可用地址")
+        }
+        
+        let redirectCandidates = Self.extractConfigRedirectCandidates(from: cleanedJson)
+            .filter { $0.lowercased() != visitKey && !nextVisited.contains($0.lowercased()) }
+        
+        if !redirectCandidates.isEmpty {
+            var lastError: Error?
+            for candidate in redirectCandidates {
+                do {
+                    return try await fetchConfig(
+                        from: candidate,
+                        visitedUrls: nextVisited,
+                        depth: depth + 1
+                    )
+                } catch {
+                    lastError = error
+                }
+            }
+            
+            if let lastError {
+                throw ConfigError.parseError("页面跳转配置解析失败，最后错误: \(lastError.localizedDescription)")
+            }
+        }
+        
+        if decodedConfig != nil {
+            throw ConfigError.parseError("配置缺少可用站点（sites / lives / parses）")
+        }
+        
+        throw ConfigError.parseError("配置格式不受支持")
+    }
+    
+    private static func uniqueUrlsInOrder(_ urls: [String]) -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        
+        for url in urls {
+            let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let key = trimmed.lowercased()
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            result.append(trimmed)
+        }
+        
+        return result
+    }
+    
+    /// 从网页/文本中提取可能的配置地址：
+    /// - 明文 URL 文本
+    /// - data-clipboard-text（常见导航页“点击复制”）
+    /// - JSON 片段中的 url 字段
+    private static func extractConfigRedirectCandidates(from content: String) -> [String] {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        var rawCandidates: [String] = []
+        
+        if (trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://")) && !trimmed.contains("\n") {
+            rawCandidates.append(trimmed)
+        }
+        
+        rawCandidates.append(contentsOf: matchCaptureGroup(
+            pattern: #"data-clipboard-text\s*=\s*["']([^"']+)["']"#,
+            in: content
+        ))
+        rawCandidates.append(contentsOf: matchCaptureGroup(
+            pattern: #""url"\s*:\s*"([^"]+)""#,
+            in: content
+        ))
+        rawCandidates.append(contentsOf: matchCaptureGroup(
+            pattern: #"(https?://[^\s"'<>\\]+)"#,
+            in: content
+        ))
+        
+        let normalized = rawCandidates
+            .map(sanitizeExtractedUrl)
+            .map(normalizeConfigUrl)
+            .filter { !$0.isEmpty }
+            .filter(isLikelyConfigPointerUrl)
+            .filter { !isLikelyBinaryAssetUrl($0) }
+        
+        return Array(uniqueUrlsInOrder(normalized).prefix(maxRedirectCandidates))
+    }
+    
+    private static func matchCaptureGroup(pattern: String, in content: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return []
+        }
+        
+        let range = NSRange(content.startIndex..<content.endIndex, in: content)
+        let matches = regex.matches(in: content, options: [], range: range)
+        
+        return matches.compactMap { match in
+            guard match.numberOfRanges >= 2,
+                  let subRange = Range(match.range(at: 1), in: content) else {
+                return nil
+            }
+            return String(content[subRange])
+        }
+    }
+    
+    private static func sanitizeExtractedUrl(_ value: String) -> String {
+        var result = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        result = result.replacingOccurrences(of: "&amp;", with: "&")
+        result = result.replacingOccurrences(of: "\\/", with: "/")
+        
+        while let last = result.last, [".", ",", ";", ")", "]", "}", "\"", "'"].contains(last) {
+            result.removeLast()
+        }
+        while let first = result.first, ["\"", "'", "(", "[", "{"].contains(first) {
+            result.removeFirst()
+        }
+        
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    private static func isLikelyBinaryAssetUrl(_ urlString: String) -> Bool {
+        guard let components = URLComponents(string: urlString) else { return false }
+        let path = components.path.lowercased()
+        return path.hasSuffix(".png")
+            || path.hasSuffix(".jpg")
+            || path.hasSuffix(".jpeg")
+            || path.hasSuffix(".webp")
+            || path.hasSuffix(".gif")
+            || path.hasSuffix(".svg")
+            || path.hasSuffix(".ico")
+            || path.hasSuffix(".css")
+            || path.hasSuffix(".woff")
+            || path.hasSuffix(".woff2")
+            || path.hasSuffix(".ttf")
+    }
+    
+    private static func isLikelyConfigPointerUrl(_ urlString: String) -> Bool {
+        guard let components = URLComponents(string: urlString) else { return false }
+        
+        let host = (components.host ?? "").lowercased()
+        let path = components.path.lowercased()
+        let query = (components.percentEncodedQuery ?? "").lowercased()
+        
+        if host.contains("raw.githubusercontent.com") || host.contains("githubusercontent.com") {
+            return true
+        }
+        
+        if path.contains(".json")
+            || path.hasSuffix("/tv")
+            || path.hasSuffix("/tv/")
+            || path.hasSuffix("/m")
+            || path.hasSuffix("/m/")
+            || path.contains("tvbox")
+            || path.contains("box")
+            || query.contains("json")
+            || query.contains("config")
+            || query.contains("url=") {
+            return true
+        }
+        
+        return false
+    }
+    
+    /// 统一规范配置 URL：
+    /// 1) 修正 https:/xxx 之类的单斜杠写法；
+    /// 2) 将 github.com/.../blob/... 转为 raw.githubusercontent.com/...；
+    /// 3) 兼容 gh-proxy + github/blob 的嵌套代理地址。
+    static func normalizeConfigUrl(_ rawUrl: String) -> String {
+        let trimmed = rawUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+        
+        let fixedScheme = fixMalformedSchemeIfNeeded(trimmed)
+        
+        if let normalizedProxy = normalizeGhProxyWrappedUrl(fixedScheme) {
+            return normalizedProxy
+        }
+        
+        if let githubRaw = convertGitHubBlobUrlToRaw(fixedScheme) {
+            return githubRaw
+        }
+        
+        return fixedScheme
+    }
+    
+    private static func fixMalformedSchemeIfNeeded(_ urlString: String) -> String {
+        let fixedHttps = urlString.replacingOccurrences(
+            of: #"^https:/(?!/)"#,
+            with: "https://",
+            options: .regularExpression
+        )
+        return fixedHttps.replacingOccurrences(
+            of: #"^http:/(?!/)"#,
+            with: "http://",
+            options: .regularExpression
+        )
+    }
+    
+    private static func normalizeGhProxyWrappedUrl(_ urlString: String) -> String? {
+        guard let components = URLComponents(string: urlString),
+              let host = components.host?.lowercased(),
+              host.contains("gh-proxy") else {
+            return nil
+        }
+        
+        let path = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !path.isEmpty else { return nil }
+        
+        let decodedPath = path.removingPercentEncoding ?? path
+        let fixedEmbedded = fixMalformedSchemeIfNeeded(decodedPath)
+        guard fixedEmbedded.hasPrefix("http://") || fixedEmbedded.hasPrefix("https://") else {
+            return nil
+        }
+        
+        let normalizedEmbedded = convertGitHubBlobUrlToRaw(fixedEmbedded) ?? fixedEmbedded
+        let scheme = components.scheme ?? "https"
+        let portSuffix = components.port.map { ":\($0)" } ?? ""
+        
+        var rebuilt = "\(scheme)://\(host)\(portSuffix)/\(normalizedEmbedded)"
+        if let query = components.percentEncodedQuery, !query.isEmpty {
+            rebuilt += "?\(query)"
+        }
+        if let fragment = components.percentEncodedFragment, !fragment.isEmpty {
+            rebuilt += "#\(fragment)"
+        }
+        return rebuilt
+    }
+    
+    private static func convertGitHubBlobUrlToRaw(_ urlString: String) -> String? {
+        guard let components = URLComponents(string: urlString),
+              let host = components.host?.lowercased(),
+              host == "github.com" || host == "www.github.com" else {
+            return nil
+        }
+        
+        let parts = components.path.split(separator: "/", omittingEmptySubsequences: true)
+        guard parts.count >= 5, parts[2] == "blob" else {
+            return nil
+        }
+        
+        let owner = String(parts[0])
+        let repo = String(parts[1])
+        let branch = String(parts[3])
+        let filePath = parts.dropFirst(4).joined(separator: "/")
+        guard !filePath.isEmpty else {
+            return nil
+        }
+        
+        var rawUrl = "https://raw.githubusercontent.com/\(owner)/\(repo)/\(branch)/\(filePath)"
+        if let query = components.percentEncodedQuery, !query.isEmpty {
+            rawUrl += "?\(query)"
+        }
+        if let fragment = components.percentEncodedFragment, !fragment.isEmpty {
+            rawUrl += "#\(fragment)"
+        }
+        return rawUrl
     }
     
     /// 去除 JSON 中的 // 行注释，兼容 TVBox 配置文件格式
@@ -122,6 +451,54 @@ class ApiConfig: ObservableObject {
             }
         }
         return line
+    }
+    
+    /// 仅探测“多仓库入口”并返回可选项。
+    /// 返回 nil 表示不是多仓库入口；返回数组表示是多仓库入口（数组可能为空）。
+    func fetchMultiRepoOptions(from apiUrl: String) async throws -> [MultiRepoOption]? {
+        let normalizedUrl = Self.normalizeConfigUrl(apiUrl)
+        let jsonStr = try await network.getString(from: normalizedUrl)
+        let cleanedJson = Self.stripJsonComments(jsonStr)
+        
+        guard let data = cleanedJson.data(using: .utf8) else {
+            throw ConfigError.parseError("无法解析配置数据")
+        }
+        
+        let decoder = JSONDecoder()
+        if let config = try? decoder.decode(AppConfigData.self, from: data), config.hasUsableContent {
+            return nil
+        }
+        
+        guard let multiRepo = try? decoder.decode(MultiRepoConfigData.self, from: data) else {
+            return nil
+        }
+        
+        let normalizedCandidates = Self.uniqueUrlsInOrder(
+            multiRepo.candidateUrls.map(Self.normalizeConfigUrl)
+        )
+        
+        var options: [MultiRepoOption] = []
+        for candidate in normalizedCandidates {
+            let matchedEntry = multiRepo.urls?.first(where: {
+                Self.normalizeConfigUrl($0.url ?? "") == candidate
+            })
+            let displayName = matchedEntry?.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let fallbackName = URL(string: candidate)?.host ?? candidate
+            let resolvedName: String
+            if let displayName, !displayName.isEmpty {
+                resolvedName = displayName
+            } else {
+                resolvedName = fallbackName
+            }
+            options.append(
+                MultiRepoOption(
+                    name: resolvedName,
+                    url: candidate
+                )
+            )
+        }
+        
+        return options
     }
     
     /// 解析配置数据
@@ -389,13 +766,13 @@ class ApiConfig: ObservableObject {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return trimmed }
         if let url = URL(string: trimmed), url.scheme != nil {
-            return trimmed
+            return Self.normalizeConfigUrl(trimmed)
         }
         guard let baseUrl = URL(string: baseConfigUrl),
               let resolved = URL(string: trimmed, relativeTo: baseUrl)?.absoluteURL else {
             return trimmed
         }
-        return resolved.absoluteString
+        return Self.normalizeConfigUrl(resolved.absoluteString)
     }
     
     private static func uniqueLiveUrls(_ urls: [String]) -> [String] {

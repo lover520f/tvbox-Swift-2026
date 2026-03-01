@@ -214,3 +214,31 @@ struct AppConfigData: Codable {
         var script: [String]?
     }
 }
+
+extension AppConfigData {
+    /// 是否包含可直接加载的核心内容
+    /// 说明：AppConfigData 字段几乎全是可选，任意 JSON 都可能“解码成功”，
+    /// 因此需要额外判定，避免把多仓库索引误当成正常配置。
+    var hasUsableContent: Bool {
+        let hasSites = !(sites?.isEmpty ?? true)
+        let hasLives = !(lives?.isEmpty ?? true)
+        let hasParses = !(parses?.isEmpty ?? true)
+        return hasSites || hasLives || hasParses
+    }
+}
+
+/// 多仓库合并索引配置（如 tvboxmulti.json）
+struct MultiRepoConfigData: Codable {
+    var urls: [Entry]?
+    
+    struct Entry: Codable {
+        var name: String?
+        var url: String?
+    }
+    
+    var candidateUrls: [String] {
+        (urls ?? [])
+            .compactMap { $0.url?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+}

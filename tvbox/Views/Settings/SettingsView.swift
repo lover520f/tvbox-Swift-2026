@@ -335,9 +335,35 @@ struct SettingsView: View {
                 }
             }
         }
+        .overlay(multiRepoSelectionOverlay)
         #if os(iOS)
         .presentationDetents([.medium, .large])
         #endif
+    }
+    
+    @ViewBuilder
+    private var multiRepoSelectionOverlay: some View {
+        if let pending = viewModel.pendingMultiRepoSelection {
+            SelectionModal(
+                title: "选择\(pending.target.title)仓库",
+                icon: "list.bullet.rectangle.portrait.fill",
+                items: pending.options,
+                selectedItem: nil,
+                itemTitle: { $0.name },
+                onSelect: { option in
+                    Task {
+                        await viewModel.selectPendingMultiRepoOption(option)
+                        if viewModel.configSuccess {
+                            appState.applyLoadedConfigState()
+                            showApiInput = false
+                        }
+                    }
+                },
+                onCancel: {
+                    viewModel.cancelPendingMultiRepoSelection()
+                }
+            )
+        }
     }
     
     private var currentApiBinding: Binding<String> {

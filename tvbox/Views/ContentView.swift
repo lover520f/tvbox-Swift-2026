@@ -21,6 +21,7 @@ struct ContentView: View {
                 setupView
             }
         }
+        .overlay(multiRepoSelectionOverlay)
         .preferredColorScheme(.dark)
         .onAppear {
             // 自动加载已保存的配置
@@ -32,6 +33,30 @@ struct ContentView: View {
                     await appState.loadConfig(vodUrl: savedVodUrl, liveUrl: savedLiveUrl)
                 }
             }
+        }
+    }
+    
+    @ViewBuilder
+    private var multiRepoSelectionOverlay: some View {
+        if let pending = settingsVM.pendingMultiRepoSelection {
+            SelectionModal(
+                title: "选择\(pending.target.title)仓库",
+                icon: "list.bullet.rectangle.portrait.fill",
+                items: pending.options,
+                selectedItem: nil,
+                itemTitle: { $0.name },
+                onSelect: { option in
+                    Task {
+                        await settingsVM.selectPendingMultiRepoOption(option)
+                        if settingsVM.configSuccess {
+                            appState.applyLoadedConfigState()
+                        }
+                    }
+                },
+                onCancel: {
+                    settingsVM.cancelPendingMultiRepoSelection()
+                }
+            )
         }
     }
     

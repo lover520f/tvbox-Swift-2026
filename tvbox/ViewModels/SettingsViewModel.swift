@@ -4,11 +4,31 @@ import SwiftUI
 /// 设置 ViewModel
 @MainActor
 class SettingsViewModel: ObservableObject {
+    struct PendingMultiRepoSelection: Identifiable {
+        enum Target {
+            case vod
+            case live
+            
+            var title: String {
+                switch self {
+                case .vod: return "点播"
+                case .live: return "直播"
+                }
+            }
+        }
+        
+        let id = UUID()
+        let target: Target
+        let sourceUrl: String
+        let options: [ApiConfig.MultiRepoOption]
+    }
+    
     @Published var vodApiUrl: String = ""
     @Published var liveApiUrl: String = ""
     @Published var isLoadingConfig = false
     @Published var configError: String?
     @Published var configSuccess = false
+    @Published var pendingMultiRepoSelection: PendingMultiRepoSelection?
     @Published var apiHistory: [String] = []
     @Published var vodPlayerEngine: PlayerEngine = .system
     @Published var livePlayerEngine: PlayerEngine = .system
@@ -74,9 +94,20 @@ class SettingsViewModel: ObservableObject {
         isLoadingConfig = true
         configError = nil
         configSuccess = false
+        pendingMultiRepoSelection = nil
         
         do {
             let resolvedLive = trimmedLive.isEmpty ? trimmedVod : trimmedLive
+            
+            if let pending = try await detectPendingMultiRepoSelection(
+                vodUrl: trimmedVod,
+                liveUrl: resolvedLive
+            ) {
+                pendingMultiRepoSelection = pending
+                isLoadingConfig = false
+                return
+            }
+            
             try await ApiConfig.shared.loadConfigs(vodApiUrl: trimmedVod, liveApiUrl: resolvedLive)
             UserDefaults.standard.set(trimmedVod, forKey: HawkConfig.API_URL)
             UserDefaults.standard.set(trimmedLive, forKey: HawkConfig.LIVE_API_URL)
@@ -90,6 +121,67 @@ class SettingsViewModel: ObservableObject {
         }
         
         isLoadingConfig = false
+    }
+    
+    func selectPendingMultiRepoOption(_ option: ApiConfig.MultiRepoOption) async {
+        guard let pending = pendingMultiRepoSelection else { return }
+        let normalizedSource = ApiConfig.normalizeConfigUrl(pending.sourceUrl)
+        
+        switch pending.target {
+        case .vod:
+            let normalizedLive = ApiConfig.normalizeConfigUrl(liveApiUrl)
+            let shouldSyncLive = !liveApiUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && normalizedLive == normalizedSource
+            vodApiUrl = option.url
+            if shouldSyncLive {
+                liveApiUrl = option.url
+            }
+        case .live:
+            liveApiUrl = option.url
+        }
+        
+        pendingMultiRepoSelection = nil
+        await loadConfig()
+    }
+    
+    func cancelPendingMultiRepoSelection() {
+        pendingMultiRepoSelection = nil
+        isLoadingConfig = false
+    }
+    
+    private func detectPendingMultiRepoSelection(
+        vodUrl: String,
+        liveUrl: String
+    ) async throws -> PendingMultiRepoSelection? {
+        if let vodOptions = try await ApiConfig.shared.fetchMultiRepoOptions(from: vodUrl) {
+            guard !vodOptions.isEmpty else {
+                throw ConfigError.parseError("点播多仓库配置中没有可用地址")
+            }
+            return PendingMultiRepoSelection(
+                target: .vod,
+                sourceUrl: vodUrl,
+                options: vodOptions
+            )
+        }
+        
+        let normalizedVod = ApiConfig.normalizeConfigUrl(vodUrl)
+        let normalizedLive = ApiConfig.normalizeConfigUrl(liveUrl)
+        guard normalizedLive != normalizedVod else {
+            return nil
+        }
+        
+        if let liveOptions = try await ApiConfig.shared.fetchMultiRepoOptions(from: liveUrl) {
+            guard !liveOptions.isEmpty else {
+                throw ConfigError.parseError("直播多仓库配置中没有可用地址")
+            }
+            return PendingMultiRepoSelection(
+                target: .live,
+                sourceUrl: liveUrl,
+                options: liveOptions
+            )
+        }
+        
+        return nil
     }
     
     // MARK: - API 历史

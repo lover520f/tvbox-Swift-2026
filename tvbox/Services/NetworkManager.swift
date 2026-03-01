@@ -4,6 +4,31 @@ import Foundation
 class NetworkManager {
     static let shared = NetworkManager()
     
+    private static let fallbackCharsetNames: [String] = [
+        "utf-8",
+        "gb18030",
+        "gbk",
+        "gb2312",
+        "utf-16",
+        "utf-16le",
+        "utf-16be",
+        "utf-32",
+        "windows-1252",
+        "iso-8859-1"
+    ]
+    
+    private static let fallbackStringEncodings: [String.Encoding] = [
+        .utf8,
+        .utf16,
+        .utf16LittleEndian,
+        .utf16BigEndian,
+        .utf32,
+        .utf32LittleEndian,
+        .utf32BigEndian,
+        .windowsCP1252,
+        .isoLatin1
+    ]
+    
     private let session: URLSession
     private let decoder = JSONDecoder()
     
@@ -35,8 +60,8 @@ class NetworkManager {
             throw NetworkError.httpError(httpResponse.statusCode)
         }
         
-        guard let str = String(data: data, encoding: .utf8) else {
-            throw NetworkError.decodingError("UTF-8 解码失败")
+        guard let str = Self.decodeString(data: data, response: httpResponse) else {
+            throw NetworkError.decodingError("文本解码失败")
         }
         
         return str
@@ -58,6 +83,44 @@ class NetworkManager {
         }
         let (data, _) = try await session.data(from: url)
         return data
+    }
+    
+    private static func decodeString(data: Data, response: HTTPURLResponse) -> String? {
+        // 优先使用服务端声明的字符集（如 gbk / gb2312 / gb18030）
+        if let charset = response.textEncodingName,
+           let declaredEncoding = encoding(fromIANACharset: charset),
+           let value = String(data: data, encoding: declaredEncoding) {
+            return value
+        }
+        
+        for charset in fallbackCharsetNames {
+            if let encoding = encoding(fromIANACharset: charset),
+               let value = String(data: data, encoding: encoding) {
+                return value
+            }
+        }
+        
+        for encoding in fallbackStringEncodings {
+            if let value = String(data: data, encoding: encoding) {
+                return value
+            }
+        }
+        
+        // 最后兜底，避免单纯因编码不一致直接报错
+        if !data.isEmpty {
+            return String(decoding: data, as: UTF8.self)
+        }
+        
+        return nil
+    }
+    
+    private static func encoding(fromIANACharset charset: String) -> String.Encoding? {
+        let cfEncoding = CFStringConvertIANACharSetNameToEncoding(charset as CFString)
+        guard cfEncoding != kCFStringEncodingInvalidId else {
+            return nil
+        }
+        let nsEncoding = CFStringConvertEncodingToNSStringEncoding(cfEncoding)
+        return String.Encoding(rawValue: nsEncoding)
     }
 }
 
