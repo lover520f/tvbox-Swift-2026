@@ -17,6 +17,8 @@ class SearchViewModel: ObservableObject {
     
     /// 源数据服务（负责多源并发搜索）。
     private let sourceService = SourceService.shared
+    /// 搜索请求序号（用于丢弃过期异步结果）。
+    private var latestSearchRequestId: UUID = UUID()
     
     /// 初始化时同步加载本地历史记录，确保搜索页首次渲染即可展示。
     init() {
@@ -27,6 +29,8 @@ class SearchViewModel: ObservableObject {
     func search() async {
         let trimmed = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        let requestId = UUID()
+        latestSearchRequestId = requestId
         
         isSearching = true
         errorMessage = nil
@@ -37,6 +41,7 @@ class SearchViewModel: ObservableObject {
         
         // 走多源并发搜索，返回聚合后的影片列表。
         let videos = await sourceService.searchAll(keyword: trimmed)
+        guard requestId == latestSearchRequestId else { return }
         self.results = videos
         
         if videos.isEmpty {
@@ -50,13 +55,18 @@ class SearchViewModel: ObservableObject {
     func searchInSource(_ source: SourceBean) async {
         let trimmed = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        let requestId = UUID()
+        latestSearchRequestId = requestId
         
         isSearching = true
+        errorMessage = nil
         
         do {
             let videos = try await sourceService.search(sourceBean: source, keyword: trimmed)
+            guard requestId == latestSearchRequestId else { return }
             self.results = videos
         } catch {
+            guard requestId == latestSearchRequestId else { return }
             errorMessage = error.localizedDescription
         }
         

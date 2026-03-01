@@ -325,9 +325,10 @@ class SourceService {
             url = "\(api)?wd=\(encodedKeyword)"
         } else if sourceBean.type == 4 {
             // Type 4: 远程接口
+            let quickValue = sourceBean.isQuickSearchEnabled ? "true" : "false"
             url = api.contains("?")
-                ? "\(api)&wd=\(encodedKeyword)&ac=detail&quick=false"
-                : "\(api)?wd=\(encodedKeyword)&ac=detail&quick=false"
+                ? "\(api)&wd=\(encodedKeyword)&ac=detail&quick=\(quickValue)"
+                : "\(api)?wd=\(encodedKeyword)&ac=detail&quick=\(quickValue)"
             
             // 加载 extend
             if let ext = sourceBean.ext, !ext.isEmpty {
@@ -345,7 +346,8 @@ class SourceService {
         }
         
         let jsonStr = try await network.getString(from: url)
-        return try parseVideoList(jsonStr, sourceKey: sourceBean.key, type: sourceBean.type)
+        let videos = try parseVideoList(jsonStr, sourceKey: sourceBean.key, type: sourceBean.type)
+        return filterSearchResults(videos, keyword: keyword)
     }
     
     /// 多源并发搜索
@@ -372,6 +374,43 @@ class SourceService {
             }
             return allResults
         }
+    }
+    
+    /// 对源返回结果做本地关键词过滤，规避部分接口返回推荐/无关内容。
+    private func filterSearchResults(_ videos: [Movie.Video], keyword: String) -> [Movie.Video] {
+        let tokens = keyword
+            .split(whereSeparator: \.isWhitespace)
+            .map { normalizeSearchText(String($0)) }
+            .filter { !$0.isEmpty }
+        
+        guard !tokens.isEmpty else { return videos }
+        
+        return videos.filter { video in
+            let searchableText = normalizeSearchText([
+                video.name,
+                video.note,
+                video.actor,
+                video.director,
+                video.type,
+                video.area,
+                video.year
+            ].joined(separator: " "))
+            guard !searchableText.isEmpty else { return false }
+            return tokens.allSatisfy { searchableText.contains($0) }
+        }
+    }
+    
+    private func normalizeSearchText(_ text: String) -> String {
+        let folded = text.folding(
+            options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+            locale: .current
+        )
+        let scalars = folded.unicodeScalars.filter { scalar in
+            !CharacterSet.whitespacesAndNewlines.contains(scalar) &&
+            !CharacterSet.punctuationCharacters.contains(scalar) &&
+            !CharacterSet.symbols.contains(scalar)
+        }
+        return String(String.UnicodeScalarView(scalars)).lowercased()
     }
     
     // MARK: - Extend 解析

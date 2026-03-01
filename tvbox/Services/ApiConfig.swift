@@ -519,6 +519,7 @@ class ApiConfig: ObservableObject {
                         api: site.api ?? "",
                         searchable: site.searchable?.value ?? 1,
                         filterable: site.filterable?.value ?? 1,
+                        quickSearch: site.quickSearch?.value ?? 0,
                         playerType: site.playerType?.value ?? 0,
                         type: site.type?.value ?? 1,
                         ext: site.ext?.stringValue
