@@ -218,6 +218,9 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
     @ViewBuilder let placeholder: () -> Placeholder
     
     @State private var loadedImage: PlatformImage?
+    @State private var loadFailed = false
+    
+    private static var delayedRetryDelay: TimeInterval { 3.0 }
     
     init(
         url: URL?,
@@ -246,6 +249,7 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
         }
         .onDisappear {
             loadedImage = nil
+            loadFailed = false
         }
     }
     
@@ -265,9 +269,17 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
             guard !Task.isCancelled else { return }
             ImageCache.shared.set(image, for: url)
             loadedImage = image
+            loadFailed = false
         } catch {
             guard !Task.isCancelled else { return }
             loadedImage = nil
+            
+            if error.isNetworkConnectionError && !loadFailed {
+                loadFailed = true
+                try? await Task.sleep(nanoseconds: UInt64(Self.delayedRetryDelay * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                await loadImage()
+            }
         }
     }
 }
@@ -307,33 +319,64 @@ final class ImageLoader {
         self.session = URLSession(configuration: config)
     }
     
+    private static let maxImageRetries = 1
+    private static let imageRetryDelay: TimeInterval = 1.0
+    
     func load(url: URL) async throws -> PlatformImage {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        // 设置常见的浏览器 User-Agent，避免部分服务器拒绝请求
         request.setValue(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             forHTTPHeaderField: "User-Agent"
         )
-        // 部分图片服务器检查 Referer
         if let host = url.host {
             request.setValue("https://\(host)/", forHTTPHeaderField: "Referer")
         }
         
-        let (data, response) = try await session.data(for: request)
+        var lastError: Error = ImageLoadError.invalidData
+        let totalAttempts = Self.maxImageRetries + 1
         
-        // 检查 HTTP 状态码
-        if let httpResponse = response as? HTTPURLResponse,
-           !(200...299).contains(httpResponse.statusCode) {
-            throw ImageLoadError.httpError(httpResponse.statusCode)
+        for attempt in 0..<totalAttempts {
+            do {
+                try Task.checkCancellation()
+                
+                let (data, response) = try await session.data(for: request)
+                
+                if let httpResponse = response as? HTTPURLResponse,
+                   !(200...299).contains(httpResponse.statusCode) {
+                    let error = ImageLoadError.httpError(httpResponse.statusCode)
+                    if Self.isRetryableImageError(error, statusCode: httpResponse.statusCode),
+                       attempt < totalAttempts - 1 {
+                        lastError = error
+                        try await Task.sleep(nanoseconds: UInt64(Self.imageRetryDelay * 1_000_000_000))
+                        continue
+                    }
+                    throw error
+                }
+                
+                let maxPixelSize = thumbnailMaxPixelSize
+                guard let image = Self.decodeImage(data: data, maxPixelSize: maxPixelSize) else {
+                    throw ImageLoadError.invalidData
+                }
+                
+                return image
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastError = error
+                if error.isNetworkConnectionError && attempt < totalAttempts - 1 {
+                    try? await Task.sleep(nanoseconds: UInt64(Self.imageRetryDelay * 1_000_000_000))
+                    continue
+                }
+                if attempt >= totalAttempts - 1 { throw error }
+            }
         }
         
-        let maxPixelSize = thumbnailMaxPixelSize
-        guard let image = Self.decodeImage(data: data, maxPixelSize: maxPixelSize) else {
-            throw ImageLoadError.invalidData
-        }
-        
-        return image
+        throw lastError
+    }
+    
+    private static func isRetryableImageError(_ error: Error, statusCode: Int) -> Bool {
+        [408, 429, 500, 502, 503, 504].contains(statusCode)
     }
     
     var cacheUsage: (memory: Int, disk: Int) {

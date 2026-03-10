@@ -63,6 +63,7 @@
 		9FCA2C5CC08A9369EA53B130 /* LiveViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21306B53D5CA8BB88593A55D /* LiveViewModel.swift */; };
 		B06E33645C9D8322D7474962 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE52456C613016065CF59F9C /* HistoryView.swift */; };
 		B271873FE89F02840EAC6975 /* VLCPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEDBFF884A656042E3EF74AA /* VLCPlayerView.swift */; };
+		B86C3ACE754B5F52B70588A9 /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7752B731B0A015EB4B85BFB1 /* NetworkMonitor.swift */; };
 		BB051B00E5F63DCFF9BC013A /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E7FB1EF8D1D9B109BFE7981 /* EmptyStateView.swift */; };
 		BB36351815C53AC6EACB475A /* VodInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA608E781D094B187D3034FD /* VodInfo.swift */; };
 		BD7E2108F8C884E1DD6EC1B9 /* tvboxApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54D163D4F6A45E9ACA696071 /* tvboxApp.swift */; };
@@ -71,6 +72,7 @@
 		D8412DB044659CA4507DE219 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE52456C613016065CF59F9C /* HistoryView.swift */; };
 		DB893501C654D6CC2D71D198 /* CacheStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFD32454522C32D876921A30 /* CacheStore.swift */; };
 		E983FD4D6902C9F359528F2E /* LiveModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE83E7D21400ACFE3BC6ED38 /* LiveModels.swift */; };
+		F01490300EAFDF38F8BD5D46 /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7752B731B0A015EB4B85BFB1 /* NetworkMonitor.swift */; };
 		F49BBFD0CCDE27C63FD97180 /* FavoritesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06CD8B07440DBB1EF2807795 /* FavoritesView.swift */; };
 		F6E863F58C52916EAB766B60 /* PlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB87D0D74C7CB27B06EBBC4A /* PlayerView.swift */; };
 		F911F241653C76EABDA844A9 /* SearchViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C0217E00DE1B92A89B4D7C3 /* SearchViewModel.swift */; };
@@ -93,6 +95,7 @@
 		6EE08247136FF788C621DA20 /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
 		6F4341B27BB1A860CB183467 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		7077934707CEA1AEB06F1EF7 /* tvbox-macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "tvbox-macOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		7752B731B0A015EB4B85BFB1 /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
 		8AAD980DF9D6ABDD040AC805 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		8E7FB1EF8D1D9B109BFE7981 /* EmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyStateView.swift; sourceTree = "<group>"; };
 		90F26F870D1B587C1292A189 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
@@ -148,6 +151,7 @@
 			children = (
 				D6F94E23C5085A1C8ACB4856 /* ApiConfig.swift */,
 				D1006DD8209F63DC3AC3C718 /* NetworkManager.swift */,
+				7752B731B0A015EB4B85BFB1 /* NetworkMonitor.swift */,
 				D5DFDD8C597739AD4B443C03 /* SourceService.swift */,
 			);
 			path = Services;
@@ -441,6 +445,7 @@
 				0B78C3CA1D93FA29531ABD0B /* Movie.swift in Sources */,
 				68A7BF3D3ECDA73637B644C8 /* MovieSort.swift in Sources */,
 				5931E2182CBA71FD467BC61B /* NetworkManager.swift in Sources */,
+				F01490300EAFDF38F8BD5D46 /* NetworkMonitor.swift in Sources */,
 				2F841DB8CE3BFB7C4F391B52 /* PlayerEngine.swift in Sources */,
 				00DC0B0A8D261A9015CE9308 /* PlayerView.swift in Sources */,
 				073BA70E29280BDF914166CF /* SearchView.swift in Sources */,
@@ -480,6 +485,7 @@
 				485F358B964A4CB6E5AC4E03 /* Movie.swift in Sources */,
 				7B76864A9BC631F1A86E8104 /* MovieSort.swift in Sources */,
 				5230AE350F993A4792B03F74 /* NetworkManager.swift in Sources */,
+				B86C3ACE754B5F52B70588A9 /* NetworkMonitor.swift in Sources */,
 				100ED189186C10410BE683C5 /* PlayerEngine.swift in Sources */,
 				F6E863F58C52916EAB766B60 /* PlayerView.swift in Sources */,
 				59DB9B1D12BAAA2F654579FE /* SearchView.swift in Sources */,

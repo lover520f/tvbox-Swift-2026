@@ -1,14 +1,15 @@
 import Foundation
 import SwiftUI
+import Combine
 
 /// 首页 ViewModel
 @MainActor
 class HomeViewModel: ObservableObject {
-    /// 分类列表（包含手动注入的“推荐”分类）。
+    /// 分类列表（包含手动注入的"推荐"分类）。
     @Published var sorts: [MovieSort.SortData] = []
     /// 当前选中的分类。
     @Published var selectedSort: MovieSort.SortData?
-    /// 首页推荐内容（对应“推荐”分类）。
+    /// 首页推荐内容（对应"推荐"分类）。
     @Published var homeVideos: [Movie.Video] = []
     /// 普通分类的视频列表（分页加载）。
     @Published var categoryVideos: [Movie.Video] = []
@@ -23,6 +24,13 @@ class HomeViewModel: ObservableObject {
     
     /// 源数据访问服务。
     private let sourceService = SourceService.shared
+    /// 标记上次加载是否因网络错误失败（用于网络恢复自动重试）。
+    private var lastLoadFailedDueToNetwork = false
+    private var networkRestoredCancellable: AnyCancellable?
+    
+    init() {
+        setupNetworkRestoredAutoRetry()
+    }
     
     /// 加载分类列表
     func loadSorts() async {
@@ -33,21 +41,36 @@ class HomeViewModel: ObservableObject {
         do {
             let result = try await sourceService.getSort(sourceBean: source)
             
-            // 插入本地“推荐”分类，保持 UI 与 Android 版本习惯一致。
+            // 插入本地"推荐"分类，保持 UI 与 Android 版本习惯一致。
             var allSorts = [MovieSort.SortData.home()]
             allSorts.append(contentsOf: result.sorts)
             
             self.sorts = allSorts
             self.homeVideos = result.homeVideos
+            lastLoadFailedDueToNetwork = false
             
             if selectedSort == nil {
                 selectedSort = allSorts.first
             }
         } catch {
             errorMessage = error.localizedDescription
+            lastLoadFailedDueToNetwork = error.isNetworkConnectionError
         }
         
         isLoading = false
+    }
+    
+    /// 网络恢复时，若上次因网络错误导致首页为空，自动重新加载。
+    private func setupNetworkRestoredAutoRetry() {
+        networkRestoredCancellable = NetworkMonitor.shared.networkRestoredPublisher
+            .sink { [weak self] in
+                guard let self else { return }
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    guard self.lastLoadFailedDueToNetwork || (self.sorts.isEmpty && self.homeVideos.isEmpty) else { return }
+                    await self.refresh()
+                }
+            }
     }
     
     /// 选择分类
@@ -89,7 +112,7 @@ class HomeViewModel: ObservableObject {
             } else {
                 categoryVideos.append(contentsOf: videos)
             }
-            // 以“返回非空”作为是否继续分页的轻量判断。
+            // 以"返回非空"作为是否继续分页的轻量判断。
             currentPage = page
             hasMore = !videos.isEmpty
         } catch {

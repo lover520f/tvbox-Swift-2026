@@ -10,6 +10,8 @@ struct ContentView: View {
     
     /// 全局状态（配置加载、分栏状态等）。
     @EnvironmentObject var appState: AppState
+    /// 网络连接状态。
+    @EnvironmentObject var networkMonitor: NetworkMonitor
     /// 设置页 ViewModel。根视图复用它处理首次配置与多仓库选择。
     @StateObject private var settingsVM = SettingsViewModel()
     /// 当前主标签索引。
@@ -28,6 +30,9 @@ struct ContentView: View {
             }
         }
         .overlay(multiRepoSelectionOverlay)
+        .overlay(alignment: .top) {
+            networkStatusBanner
+        }
         .preferredColorScheme(.dark)
         .onAppear {
             // 自动加载已保存的配置
@@ -350,6 +355,35 @@ struct ContentView: View {
                     Spacer(minLength: 50)
                 }
             }
+        }
+    }
+    
+    /// 网络断开时在顶部显示提示条。
+    @ViewBuilder
+    private var networkStatusBanner: some View {
+        if !networkMonitor.isConnected {
+            HStack(spacing: 8) {
+                Image(systemName: "wifi.slash")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("网络连接已断开")
+                    .font(.system(size: 13, weight: .medium))
+                if appState.isRetryingConfig {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .tint(.white)
+                }
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(
+                Capsule()
+                    .fill(Color.red.opacity(0.85))
+            )
+            .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+            .padding(.top, 8)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .animation(.easeInOut(duration: 0.3), value: networkMonitor.isConnected)
         }
     }
     
